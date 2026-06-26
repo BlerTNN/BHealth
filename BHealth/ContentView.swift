@@ -331,8 +331,7 @@ private struct InsightCard: View {
 }
 
 private struct AssistantView: View {
-    @State private var draftMessage = ""
-    @State private var messages = AssistantMessage.sample
+    @StateObject private var viewModel = FoodAssistantViewModel()
 
     private let quickPrompts: [QuickPrompt] = [
         QuickPrompt(title: "记录饮食", icon: "fork.knife", message: "我早餐吃了一个鸡蛋、一杯拿铁和一片吐司，帮我估算热量。"),
@@ -348,26 +347,67 @@ private struct AssistantView: View {
                         VStack(alignment: .leading, spacing: 16) {
                             AssistantHeader()
 
+                            APIKeySetupCard(
+                                apiKeyInput: $viewModel.apiKeyInput,
+                                hasAPIKey: viewModel.hasAPIKey,
+                                statusMessage: viewModel.apiKeyStatusMessage,
+                                saveAction: viewModel.saveAPIKey,
+                                deleteAction: viewModel.deleteAPIKey
+                            )
+
                             quickPromptRow
 
                             VStack(spacing: 12) {
-                                ForEach(messages) { message in
+                                ForEach(viewModel.messages) { message in
                                     ChatBubble(message: message)
                                         .id(message.id)
+                                }
+
+                                if viewModel.isSending {
+                                    LoadingBubble()
+                                        .id("loading")
+                                }
+
+                                if let calculation = viewModel.pendingCalculation {
+                                    MealCalculationDraftCard(
+                                        calculation: calculation,
+                                        saveAction: viewModel.savePendingCalculation
+                                    )
+                                    .id(calculation.id)
                                 }
                             }
                         }
                         .padding(.horizontal, 20)
                         .padding(.vertical, 18)
                     }
-                    .onChange(of: messages.count) { _, _ in
+                    .onChange(of: viewModel.messages.count) { _, _ in
                         withAnimation(.snappy) {
-                            proxy.scrollTo(messages.last?.id, anchor: .bottom)
+                            proxy.scrollTo(viewModel.messages.last?.id, anchor: .bottom)
+                        }
+                    }
+                    .onChange(of: viewModel.isSending) { _, isSending in
+                        guard isSending else { return }
+                        withAnimation(.snappy) {
+                            proxy.scrollTo("loading", anchor: .bottom)
+                        }
+                    }
+                    .onChange(of: viewModel.pendingCalculation?.id) { _, id in
+                        guard let id else { return }
+                        withAnimation(.snappy) {
+                            proxy.scrollTo(id, anchor: .bottom)
                         }
                     }
                 }
 
-                ChatInputBar(text: $draftMessage, sendAction: sendDraftMessage)
+                ChatInputBar(
+                    text: $viewModel.draftMessage,
+                    isSending: viewModel.isSending,
+                    sendAction: {
+                        Task {
+                            await viewModel.sendDraftMessage()
+                        }
+                    }
+                )
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                     .background(.regularMaterial)
@@ -382,7 +422,9 @@ private struct AssistantView: View {
             HStack(spacing: 10) {
                 ForEach(quickPrompts) { prompt in
                     Button {
-                        send(prompt.message)
+                        Task {
+                            await viewModel.send(prompt.message)
+                        }
                     } label: {
                         Label(prompt.title, systemImage: prompt.icon)
                             .font(.subheadline.weight(.semibold))
@@ -396,32 +438,6 @@ private struct AssistantView: View {
             }
             .padding(.vertical, 2)
         }
-    }
-
-    private func sendDraftMessage() {
-        let trimmed = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        send(trimmed)
-        draftMessage = ""
-    }
-
-    private func send(_ text: String) {
-        withAnimation(.snappy) {
-            messages.append(AssistantMessage(text: text, isFromUser: true))
-            messages.append(AssistantMessage(text: response(for: text), isFromUser: false))
-        }
-    }
-
-    private func response(for text: String) -> String {
-        if text.contains("吃") || text.contains("早餐") || text.contains("晚餐") || text.contains("饮食") {
-            return "我会先按常见份量粗略估算：这餐约 430-560 kcal。接入 AI 与本地食物库后，可以把每次估算自动写入今日摄入。"
-        }
-
-        if text.contains("走") || text.contains("运动") || text.contains("步") {
-            return "今天可以选择 25 分钟快走或 12 分钟低强度力量训练。目标是轻微出汗，同时不要影响睡眠。"
-        }
-
-        return "收到。我会把你的目标、基础代谢、Apple Health 活动消耗和饮食记录合并，给出更贴近当天状态的建议。"
     }
 }
 
@@ -446,6 +462,65 @@ private struct AssistantHeader: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineSpacing(3)
+            }
+        }
+        .healthCard()
+    }
+}
+
+private struct APIKeySetupCard: View {
+    @Binding var apiKeyInput: String
+    let hasAPIKey: Bool
+    let statusMessage: String?
+    let saveAction: () -> Void
+    let deleteAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Image(systemName: hasAPIKey ? "checkmark.shield.fill" : "key.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(AppColor.healthGreen)
+                    .frame(width: 36, height: 36)
+                    .background(AppColor.healthGreen.opacity(0.14), in: Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(hasAPIKey ? "DeepSeek 已连接" : "DeepSeek API Key")
+                        .font(.headline.weight(.semibold))
+
+                    Text(hasAPIKey ? "密钥保存在系统 Keychain" : "保存后开始真实 AI 对话")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+            }
+
+            if hasAPIKey {
+                Button(role: .destructive, action: deleteAction) {
+                    Label("删除密钥", systemImage: "trash")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+            } else {
+                HStack(spacing: 10) {
+                    SecureField("DeepSeek API Key", text: $apiKeyInput)
+                        .textFieldStyle(.roundedBorder)
+
+                    Button(action: saveAction) {
+                        Label("保存", systemImage: "lock.fill")
+                            .font(.subheadline.weight(.bold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(AppColor.healthGreen)
+                    .disabled(apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+
+            if let statusMessage {
+                Text(statusMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
         .healthCard()
@@ -491,8 +566,111 @@ private struct ChatBubble: View {
     }
 }
 
+private struct LoadingBubble: View {
+    var body: some View {
+        HStack(alignment: .bottom) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(AppColor.healthGreen)
+                .frame(width: 30, height: 30)
+                .background(AppColor.healthGreen.opacity(0.14), in: Circle())
+
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+
+                Text("正在分析")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 15)
+            .padding(.vertical, 12)
+            .background(AppColor.cardBackground, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+            Spacer(minLength: 44)
+        }
+    }
+}
+
+private struct MealCalculationDraftCard: View {
+    let calculation: MealCalculationResult
+    let saveAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("待确认记录", systemImage: "doc.badge.clock")
+                    .font(.headline.weight(.semibold))
+
+                Spacer()
+
+                Text(confidenceText)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(confidenceColor)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(confidenceColor.opacity(0.14), in: Capsule())
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text("\(Int(calculation.totalEnergyKcal.rounded()))")
+                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+
+                Text("kcal")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Text("范围 \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded()))")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 4)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(calculation.items.prefix(3)) { item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 5))
+                            .foregroundStyle(AppColor.healthGreen)
+                            .padding(.top, 7)
+
+                        Text("\(item.rawText)：\(item.matchedFoodName)，约 \(Int(item.energyKcal.rounded())) kcal")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+            }
+
+            Text("来源：\(calculation.sourceSummary)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button(action: saveAction) {
+                Label("确认记录", systemImage: "checkmark.circle.fill")
+                    .font(.subheadline.weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(AppColor.healthGreen)
+        }
+        .healthCard()
+    }
+
+    private var confidenceText: String {
+        calculation.confidence == "low" ? "低可信度" : "中等可信度"
+    }
+
+    private var confidenceColor: Color {
+        calculation.confidence == "low" ? AppColor.energyOrange : AppColor.healthGreen
+    }
+}
+
 private struct ChatInputBar: View {
     @Binding var text: String
+    let isSending: Bool
     let sendAction: () -> Void
 
     var body: some View {
@@ -504,16 +682,28 @@ private struct ChatInputBar: View {
                 .background(AppColor.cardBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
             Button(action: sendAction) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 42, height: 42)
-                    .background(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.secondary.opacity(0.35) : AppColor.healthGreen, in: Circle())
+                Group {
+                    if isSending {
+                        ProgressView()
+                            .tint(.white)
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 16, weight: .bold))
+                    }
+                }
+                .foregroundStyle(.white)
+                .frame(width: 42, height: 42)
+                .background(sendDisabled ? Color.secondary.opacity(0.35) : AppColor.healthGreen, in: Circle())
             }
             .buttonStyle(.plain)
-            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .animation(.snappy, value: text)
+            .disabled(sendDisabled)
+            .animation(.snappy, value: sendDisabled)
         }
+    }
+
+    private var sendDisabled: Bool {
+        isSending || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 
@@ -747,18 +937,6 @@ private struct CalorieEntry: Identifiable {
         CalorieEntry(day: "五", intake: 1680, burn: 2100),
         CalorieEntry(day: "六", intake: 2050, burn: 2360),
         CalorieEntry(day: "日", intake: 1920, burn: 2200)
-    ]
-}
-
-private struct AssistantMessage: Identifiable {
-    let id = UUID()
-    let text: String
-    let isFromUser: Bool
-
-    static let sample: [AssistantMessage] = [
-        AssistantMessage(text: "你好，我是你的 AI 健康助手。你可以直接告诉我今天吃了什么，我会帮你估算卡路里。", isFromUser: false),
-        AssistantMessage(text: "午餐吃了鸡胸肉沙拉和一杯无糖拿铁。", isFromUser: true),
-        AssistantMessage(text: "粗略估算约 520-650 kcal。鸡胸肉和蔬菜很适合控热量，拿铁如果是全脂奶可能再增加 100 kcal 左右。", isFromUser: false)
     ]
 }
 
