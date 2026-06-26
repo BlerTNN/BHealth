@@ -42,25 +42,62 @@ private enum HealthTab {
 }
 
 private struct OverviewView: View {
-    private let intake = 1680
-    private let intakeTarget = 2100
-    private let basalBurn = 1560
-    private let activeBurn = 540
-    private let weeklyEntries = CalorieEntry.sampleWeek
+    @EnvironmentObject private var healthStore: HealthDashboardStore
+
+    private var today: DailyHealthOverview {
+        healthStore.today
+    }
+
+    private var intake: Int {
+        Int(today.intakeKcal.rounded())
+    }
 
     private var totalBurn: Int {
-        basalBurn + activeBurn
+        Int(today.totalBurnKcal.rounded())
+    }
+
+    private var basalBurn: Int {
+        Int(today.basalEnergyKcal.rounded())
+    }
+
+    private var activeBurn: Int {
+        Int(today.activeEnergyKcal.rounded())
     }
 
     private var calorieBalance: Int {
-        totalBurn - intake
+        Int(today.balanceKcal.rounded())
+    }
+
+    private var intakeTarget: Int {
+        max(totalBurn, 1800)
+    }
+
+    private var weeklyEntries: [CalorieEntry] {
+        healthStore.weeklySummaries.map { summary in
+            CalorieEntry(
+                day: summary.date.weekdaySymbol,
+                intake: Int(summary.intakeKcal.rounded()),
+                burn: Int(summary.totalBurnKcal.rounded())
+            )
+        }
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    OverviewHeader()
+                    OverviewHeader(statusMessage: healthStore.healthKitStatusMessage)
+
+                    HealthConnectionCard(
+                        isAvailable: healthStore.healthKitAvailable,
+                        isSyncing: healthStore.isSyncingHealthKit,
+                        statusMessage: healthStore.healthKitStatusMessage,
+                        syncAction: {
+                            Task {
+                                await healthStore.requestHealthAuthorizationAndRefresh()
+                            }
+                        }
+                    )
 
                     CalorieSummaryCard(
                         intake: intake,
@@ -75,7 +112,7 @@ private struct OverviewView: View {
                             value: "\(basalBurn)",
                             unit: "kcal",
                             systemImage: "person.fill.checkmark",
-                            tint: AppColor.healthGreen
+                            tint: today.basalIsEstimated ? AppColor.skyBlue : AppColor.healthGreen
                         )
 
                         MetricCard(
@@ -89,18 +126,32 @@ private struct OverviewView: View {
 
                     WeeklyChartCard(entries: weeklyEntries)
 
-                    InsightCard()
+                    InsightCard(summary: today)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 18)
             }
             .background(AppColor.screenBackground.ignoresSafeArea())
             .navigationTitle("今日总览")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        Task {
+                            await healthStore.requestHealthAuthorizationAndRefresh()
+                        }
+                    } label: {
+                        Label("同步", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(healthStore.isSyncingHealthKit || !healthStore.healthKitAvailable)
+                }
+            }
         }
     }
 }
 
 private struct OverviewHeader: View {
+    let statusMessage: String
+
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
             ZStack {
@@ -118,14 +169,60 @@ private struct OverviewHeader: View {
                     .font(.title2.weight(.bold))
                     .foregroundStyle(.primary)
 
-                Text("本地示例数据 · 稍后接入 Apple Health")
+                Text(statusMessage)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
 
             Spacer()
         }
         .padding(.top, 4)
+    }
+}
+
+private struct HealthConnectionCard: View {
+    let isAvailable: Bool
+    let isSyncing: Bool
+    let statusMessage: String
+    let syncAction: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: isAvailable ? "heart.text.square.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(isAvailable ? AppColor.healthGreen : AppColor.energyOrange)
+                .frame(width: 40, height: 40)
+                .background((isAvailable ? AppColor.healthGreen : AppColor.energyOrange).opacity(0.14), in: Circle())
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Apple Health")
+                    .font(.headline.weight(.semibold))
+
+                Text(statusMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+
+            Button(action: syncAction) {
+                Group {
+                    if isSyncing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 16, weight: .bold))
+                    }
+                }
+                .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.bordered)
+            .disabled(isSyncing || !isAvailable)
+        }
+        .healthCard()
     }
 }
 
@@ -314,19 +411,37 @@ private struct WeeklyChartCard: View {
 }
 
 private struct InsightCard: View {
+    let summary: DailyHealthOverview
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Label("今日建议", systemImage: "lightbulb.max.fill")
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.primary)
 
-            Text("你今天还有约 420 kcal 的弹性空间。晚餐可以优先选择高蛋白、低油脂食物，并保持 20 分钟轻量活动。")
+            Text(message)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineSpacing(4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .healthCard()
+    }
+
+    private var message: String {
+        if summary.intakeKcal == 0 {
+            return "今天还没有确认保存的饮食记录。你可以到 AI 助手页用自然语言记录一餐，总览会自动同步摄入热量。"
+        }
+
+        if summary.balanceKcal >= 250 {
+            return "今天热量仍有约 \(Int(summary.balanceKcal.rounded())) kcal 余量。晚餐可以优先选择高蛋白、低油脂食物，并保持轻量活动。"
+        }
+
+        if summary.balanceKcal >= 0 {
+            return "今天摄入和消耗比较接近。后续记录尽量补充克重或份量，热量估算会更可靠。"
+        }
+
+        return "今天摄入已高于消耗约 \(abs(Int(summary.balanceKcal.rounded()))) kcal。可以选择散步或拉伸，不建议用高强度运动强行抵消。"
     }
 }
 
@@ -708,13 +823,8 @@ private struct ChatInputBar: View {
 }
 
 private struct ProfileView: View {
-    @State private var name = "Bill"
-    @State private var height = "175"
-    @State private var weight = "70"
-    @State private var age = "30"
-    @State private var targetWeight = "68"
+    @EnvironmentObject private var healthStore: HealthDashboardStore
     @State private var isEditingProfile = false
-    @State private var showsSyncNotice = false
 
     var body: some View {
         NavigationStack {
@@ -723,10 +833,10 @@ private struct ProfileView: View {
                     profileHeader
 
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                        ProfileMetricCard(title: "身高", value: height, unit: "cm", icon: "ruler", tint: AppColor.skyBlue)
-                        ProfileMetricCard(title: "体重", value: weight, unit: "kg", icon: "scalemass.fill", tint: AppColor.healthGreen)
-                        ProfileMetricCard(title: "年龄", value: age, unit: "岁", icon: "calendar", tint: AppColor.energyOrange)
-                        ProfileMetricCard(title: "目标体重", value: targetWeight, unit: "kg", icon: "target", tint: AppColor.violet)
+                        ProfileMetricCard(title: "身高", value: formatNumber(healthStore.profile.heightCm), unit: "cm", icon: "ruler", tint: AppColor.skyBlue)
+                        ProfileMetricCard(title: "体重", value: formatNumber(healthStore.profile.weightKg), unit: "kg", icon: "scalemass.fill", tint: AppColor.healthGreen)
+                        ProfileMetricCard(title: "年龄", value: formatInteger(healthStore.profile.age), unit: "岁", icon: "calendar", tint: AppColor.energyOrange)
+                        ProfileMetricCard(title: "目标体重", value: formatNumber(healthStore.profile.targetWeightKg), unit: "kg", icon: "target", tint: AppColor.violet)
                     }
 
                     syncCard
@@ -747,17 +857,9 @@ private struct ProfileView: View {
             }
             .sheet(isPresented: $isEditingProfile) {
                 ProfileEditorView(
-                    name: $name,
-                    height: $height,
-                    weight: $weight,
-                    age: $age,
-                    targetWeight: $targetWeight
+                    profile: healthStore.profile,
+                    saveAction: healthStore.saveProfile
                 )
-            }
-            .alert("Apple Health 同步", isPresented: $showsSyncNotice) {
-                Button("知道了", role: .cancel) {}
-            } message: {
-                Text("当前版本先完成 UI。下一阶段接入 HealthKit 权限后，会在本地读取并保存身高、体重和运动消耗。")
             }
         }
     }
@@ -769,16 +871,16 @@ private struct ProfileView: View {
                     .fill(AppColor.healthGreen.gradient)
                     .frame(width: 78, height: 78)
 
-                Text(String(name.prefix(1)).uppercased())
+                Text(String(healthStore.profile.name.prefix(1)).uppercased())
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
             }
 
             VStack(alignment: .leading, spacing: 7) {
-                Text(name)
+                Text(healthStore.profile.name)
                     .font(.title2.weight(.bold))
 
-                Text("目标：稳步控制热量，建立长期健康记录")
+                Text(profileSubtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineSpacing(3)
@@ -802,24 +904,48 @@ private struct ProfileView: View {
                     Text("Apple Health")
                         .font(.headline.weight(.semibold))
 
-                    Text("稍后接入后，数据只在本地读取与保存")
+                    Text(healthStore.healthKitStatusMessage)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
             }
 
             Button {
-                showsSyncNotice = true
+                Task {
+                    await healthStore.requestHealthAuthorizationAndRefresh()
+                }
             } label: {
-                Label("从 Apple Health 同步", systemImage: "arrow.triangle.2.circlepath")
+                Label(healthStore.isSyncingHealthKit ? "同步中" : "从 Apple Health 同步", systemImage: "arrow.triangle.2.circlepath")
                     .font(.subheadline.weight(.bold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
             }
             .buttonStyle(.borderedProminent)
             .tint(AppColor.healthGreen)
+            .disabled(healthStore.isSyncingHealthKit || !healthStore.healthKitAvailable)
         }
         .healthCard()
+    }
+
+    private var profileSubtitle: String {
+        if let syncedAt = healthStore.profile.lastSyncedAt {
+            return "上次同步：\(syncedAt.formatted(date: .abbreviated, time: .shortened))"
+        }
+        return "目标：稳步控制热量，建立长期健康记录"
+    }
+
+    private func formatNumber(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        if value.rounded() == value {
+            return "\(Int(value))"
+        }
+        return String(format: "%.1f", value)
+    }
+
+    private func formatInteger(_ value: Int?) -> String {
+        guard let value else { return "--" }
+        return "\(value)"
     }
 }
 
@@ -863,11 +989,24 @@ private struct ProfileMetricCard: View {
 
 private struct ProfileEditorView: View {
     @Environment(\.dismiss) private var dismiss
-    @Binding var name: String
-    @Binding var height: String
-    @Binding var weight: String
-    @Binding var age: String
-    @Binding var targetWeight: String
+    @State private var name: String
+    @State private var height: String
+    @State private var weight: String
+    @State private var age: String
+    @State private var targetWeight: String
+    @State private var biologicalSex: String
+
+    let saveAction: (UserHealthProfile) -> Void
+
+    init(profile: UserHealthProfile, saveAction: @escaping (UserHealthProfile) -> Void) {
+        _name = State(initialValue: profile.name)
+        _height = State(initialValue: profile.heightCm.map { Self.format($0) } ?? "")
+        _weight = State(initialValue: profile.weightKg.map { Self.format($0) } ?? "")
+        _age = State(initialValue: profile.age.map(String.init) ?? "")
+        _targetWeight = State(initialValue: profile.targetWeightKg.map { Self.format($0) } ?? "")
+        _biologicalSex = State(initialValue: profile.biologicalSex ?? "unspecified")
+        self.saveAction = saveAction
+    }
 
     var body: some View {
         NavigationStack {
@@ -878,6 +1017,11 @@ private struct ProfileEditorView: View {
                     TextField("体重 kg", text: $weight)
                     TextField("年龄", text: $age)
                     TextField("目标体重 kg", text: $targetWeight)
+                    Picker("生理性别", selection: $biologicalSex) {
+                        Text("未指定").tag("unspecified")
+                        Text("男").tag("male")
+                        Text("女").tag("female")
+                    }
                 }
             }
             .navigationTitle("编辑资料")
@@ -890,12 +1034,30 @@ private struct ProfileEditorView: View {
 
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") {
+                        saveAction(
+                            UserHealthProfile(
+                                name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Bill" : name,
+                                heightCm: Double(height),
+                                weightKg: Double(weight),
+                                age: Int(age),
+                                targetWeightKg: Double(targetWeight),
+                                biologicalSex: biologicalSex == "unspecified" ? nil : biologicalSex,
+                                lastSyncedAt: nil
+                            )
+                        )
                         dismiss()
                     }
                     .fontWeight(.semibold)
                 }
             }
         }
+    }
+
+    private static func format(_ value: Double) -> String {
+        if value.rounded() == value {
+            return "\(Int(value))"
+        }
+        return String(format: "%.1f", value)
     }
 }
 
@@ -987,6 +1149,16 @@ private extension View {
     }
 }
 
+private extension Date {
+    var weekdaySymbol: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "E"
+        return formatter.string(from: self)
+    }
+}
+
 #Preview {
     ContentView()
+        .environmentObject(HealthDashboardStore())
 }
