@@ -77,7 +77,7 @@ final class HealthDashboardStore: ObservableObject {
         today = DailyHealthOverview.empty(for: Date())
         weeklySummaries = []
         yearSummaries = []
-        healthKitStatusMessage = healthKitService.isAvailable ? "尚未同步 Apple Health" : "当前设备不可用 HealthKit"
+        healthKitStatusMessage = healthKitService.isAvailable ? "尚未同步 Apple Health / Fitness" : "当前设备不可用 HealthKit"
 
         recomputeSummaries()
         mealRecordsCancellable = NotificationCenter.default.publisher(for: .mealRecordsDidChange)
@@ -104,13 +104,30 @@ final class HealthDashboardStore: ObservableObject {
         }
     }
 
+    func refreshHealthDataIfPossible() async {
+        guard healthKitService.isAvailable,
+              profile.lastSyncedAt != nil,
+              !isSyncingHealthKit else {
+            return
+        }
+
+        isSyncingHealthKit = true
+        defer { isSyncingHealthKit = false }
+
+        do {
+            try await refreshFromHealthKit()
+        } catch {
+            healthKitStatusMessage = "Apple Health / Fitness 自动刷新失败：\(error.localizedDescription)"
+        }
+    }
+
     func refreshFromHealthKit() async throws {
         let snapshot = try await healthKitService.fetchSnapshot()
         merge(snapshot: snapshot)
         profile.lastSyncedAt = Date()
         profileStore.save(profile)
         recomputeSummaries()
-        healthKitStatusMessage = "Apple Health 已同步"
+        healthKitStatusMessage = "Apple Health / Fitness 已同步"
     }
 
     func saveProfile(_ updatedProfile: UserHealthProfile) {
@@ -292,6 +309,7 @@ struct HealthKitService {
         async let heightMeters = latestQuantity(.height, unit: .meter())
         async let weightKg = latestQuantity(.bodyMass, unit: .gramUnit(with: .kilo))
         async let activeEnergy = dailyCumulativeValues(.activeEnergyBurned, unit: .kilocalorie())
+        async let workoutEnergy = dailyWorkoutEnergyValues()
         async let basalEnergy = dailyCumulativeValues(.basalEnergyBurned, unit: .kilocalorie())
         async let steps = dailyCumulativeValues(.stepCount, unit: .count())
 
@@ -299,20 +317,23 @@ struct HealthKitService {
         let heightValue = try await heightMeters
         let weightValue = try await weightKg
         let activeByDay = try await activeEnergy
+        let workoutByDay = try await workoutEnergy
         let basalByDay = try await basalEnergy
         let stepsByDay = try await steps
 
         let calendar = Calendar.current
         let allDays = Set(activeByDay.keys)
+            .union(workoutByDay.keys)
             .union(basalByDay.keys)
             .union(stepsByDay.keys)
             .sorted()
 
         let metrics = allDays.map { day in
             let normalizedDay = calendar.startOfDay(for: day)
+            let activeKcal = max(activeByDay[normalizedDay] ?? 0, workoutByDay[normalizedDay] ?? 0)
             return HealthDayMetrics(
                 date: normalizedDay,
-                activeEnergyKcal: activeByDay[normalizedDay] ?? 0,
+                activeEnergyKcal: activeKcal,
                 basalEnergyKcal: basalByDay[normalizedDay] ?? 0,
                 stepCount: stepsByDay[normalizedDay] ?? 0
             )
@@ -342,6 +363,8 @@ struct HealthKitService {
             }
         }
 
+        types.insert(HKObjectType.workoutType())
+
         if let dateOfBirth = HKObjectType.characteristicType(forIdentifier: .dateOfBirth) {
             types.insert(dateOfBirth)
         }
@@ -367,6 +390,46 @@ struct HealthKitService {
 
                 let value = (samples?.first as? HKQuantitySample)?.quantity.doubleValue(for: unit)
                 continuation.resume(returning: value)
+            }
+
+            healthStore.execute(query)
+        }
+    }
+
+    private func dailyWorkoutEnergyValues() async throws -> [Date: Double] {
+        guard let activeEnergyType = HKObjectType.quantityType(forIdentifier: .activeEnergyBurned) else {
+            return [:]
+        }
+
+        let calendar = Calendar.current
+        let todayStart = calendar.startOfDay(for: Date())
+        guard let startDate = calendar.date(byAdding: .day, value: -364, to: todayStart),
+              let endDate = calendar.date(byAdding: .day, value: 1, to: todayStart) else {
+            return [:]
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+            let query = HKSampleQuery(
+                sampleType: HKObjectType.workoutType(),
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, samples, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                let values = (samples as? [HKWorkout] ?? []).reduce(into: [Date: Double]()) { result, workout in
+                    let day = calendar.startOfDay(for: workout.startDate)
+                    let kcal = workout.statistics(for: activeEnergyType)?
+                        .sumQuantity()?
+                        .doubleValue(for: .kilocalorie()) ?? 0
+                    result[day, default: 0] += kcal
+                }
+
+                continuation.resume(returning: values)
             }
 
             healthStore.execute(query)

@@ -48,14 +48,6 @@ private struct OverviewView: View {
         healthStore.today
     }
 
-    private var intake: Int {
-        Int(today.intakeKcal.rounded())
-    }
-
-    private var totalBurn: Int {
-        Int(today.totalBurnKcal.rounded())
-    }
-
     private var basalBurn: Int {
         Int(today.basalEnergyKcal.rounded())
     }
@@ -68,12 +60,8 @@ private struct OverviewView: View {
         Int(today.balanceKcal.rounded())
     }
 
-    private var intakeTarget: Int {
-        max(totalBurn, 1800)
-    }
-
-    private var historyEntries: [CalorieEntry] {
-        healthStore.yearSummaries.map { summary in
+    private var weeklyEntries: [CalorieEntry] {
+        healthStore.weeklySummaries.map { summary in
             CalorieEntry(
                 date: summary.date,
                 intake: Int(summary.intakeKcal.rounded()),
@@ -87,9 +75,6 @@ private struct OverviewView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     CalorieSummaryCard(
-                        intake: intake,
-                        intakeTarget: intakeTarget,
-                        totalBurn: totalBurn,
                         calorieBalance: calorieBalance
                     )
 
@@ -103,7 +88,7 @@ private struct OverviewView: View {
                         )
 
                         MetricCard(
-                            title: "运动消耗",
+                            title: "健身消耗",
                             value: "\(activeBurn)",
                             unit: "kcal",
                             systemImage: "figure.run",
@@ -111,7 +96,7 @@ private struct OverviewView: View {
                         )
                     }
 
-                    HistoryTrendChartCard(entries: historyEntries)
+                    WeeklyTrendChartCard(entries: weeklyEntries)
 
                     InsightCard(summary: today)
 
@@ -122,100 +107,71 @@ private struct OverviewView: View {
             }
             .background(AppColor.screenBackground.ignoresSafeArea())
             .navigationTitle("今日总览")
+            .task {
+                await healthStore.refreshHealthDataIfPossible()
+            }
         }
     }
 }
 
 private struct CalorieSummaryCard: View {
-    let intake: Int
-    let intakeTarget: Int
-    let totalBurn: Int
     let calorieBalance: Int
 
-    private var intakeProgress: Double {
-        min(Double(intake) / Double(intakeTarget), 1)
+    private var isOverBudget: Bool {
+        calorieBalance < 0
+    }
+
+    private var tint: Color {
+        isOverBudget ? AppColor.warningRed : AppColor.healthGreen
+    }
+
+    private var statusTitle: String {
+        isOverBudget ? "今日已超出" : "今日余量"
+    }
+
+    private var statusSubtitle: String {
+        isOverBudget ? "摄入已高于今日消耗" : "目标是让摄入低于消耗"
+    }
+
+    private var displayedBalance: Int {
+        abs(calorieBalance)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            HStack(alignment: .center, spacing: 20) {
-                ProgressRing(progress: intakeProgress, tint: AppColor.healthGreen) {
-                    VStack(spacing: 3) {
-                        Text("\(Int(intakeProgress * 100))%")
-                            .font(.title3.weight(.bold))
-                            .monospacedDigit()
+            HStack(alignment: .center, spacing: 16) {
+                Image(systemName: isOverBudget ? "exclamationmark.triangle.fill" : "checkmark.seal.fill")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 68, height: 68)
+                    .background(tint.gradient, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
 
-                        Text("摄入目标")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .frame(width: 118, height: 118)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("今日热量")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(statusTitle)
                         .font(.headline.weight(.semibold))
+                        .foregroundStyle(.primary)
 
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text("\(intake)")
-                            .font(.system(size: 34, weight: .bold, design: .rounded))
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text("\(displayedBalance)")
+                            .font(.system(size: 42, weight: .bold, design: .rounded))
                             .monospacedDigit()
+                            .foregroundStyle(tint)
 
-                        Text("/ \(intakeTarget) kcal")
-                            .font(.subheadline.weight(.medium))
+                        Text("kcal")
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
 
-                    Label("净余量 \(calorieBalance) kcal", systemImage: "arrow.down.forward.circle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AppColor.healthGreen)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
+                    Text(statusSubtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
 
                 Spacer(minLength: 0)
             }
-
-            HStack(spacing: 12) {
-                CaloriePill(title: "已摄入", value: intake, tint: AppColor.healthGreen, icon: "fork.knife")
-                CaloriePill(title: "已消耗", value: totalBurn, tint: AppColor.energyOrange, icon: "flame.fill")
-            }
         }
         .healthCard()
-    }
-}
-
-private struct CaloriePill: View {
-    let title: String
-    let value: Int
-    let tint: Color
-    let icon: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 30, height: 30)
-                .background(tint.opacity(0.14), in: Circle())
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Text("\(value) kcal")
-                    .font(.subheadline.weight(.bold))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.76)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity)
-        .background(AppColor.softFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 
@@ -255,28 +211,33 @@ private struct MetricCard: View {
     }
 }
 
-private struct HistoryTrendChartCard: View {
+private struct WeeklyTrendChartCard: View {
     let entries: [CalorieEntry]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("近一年趋势")
+                    Text("近 7 天趋势")
                         .font(.headline.weight(.semibold))
 
-                    Text("横向滑动查看每天摄入与消耗")
+                    Text("每日摄入与消耗对比")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
-                Image(systemName: "chart.bar.xaxis")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(AppColor.healthGreen)
-                    .frame(width: 38, height: 38)
-                    .background(AppColor.healthGreen.opacity(0.14), in: Circle())
+                NavigationLink {
+                    YearCalendarView()
+                } label: {
+                    Label("年历", systemImage: "calendar")
+                        .font(.subheadline.weight(.bold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                }
+                .buttonStyle(.bordered)
+                .tint(AppColor.healthGreen)
             }
 
             Chart(entries) { entry in
@@ -305,17 +266,326 @@ private struct HistoryTrendChartCard: View {
                 AxisMarks(position: .leading)
             }
             .chartXAxis {
-                AxisMarks(values: .stride(by: .month)) { _ in
+                AxisMarks(values: .stride(by: .day)) { _ in
                     AxisGridLine()
-                    AxisValueLabel(format: .dateTime.month(.abbreviated))
+                    AxisValueLabel(format: .dateTime.weekday(.narrow))
                 }
             }
-            .chartScrollableAxes(.horizontal)
-            .chartXVisibleDomain(length: 60 * 60 * 24 * 31)
-            .chartScrollPosition(initialX: Date())
             .frame(height: 190)
         }
         .healthCard()
+    }
+}
+
+private struct YearCalendarView: View {
+    @EnvironmentObject private var healthStore: HealthDashboardStore
+
+    private var monthGroups: [YearMonthGroup] {
+        let calendar = Calendar.current
+        let grouped = Dictionary(grouping: healthStore.yearSummaries) { summary in
+            calendar.date(from: calendar.dateComponents([.year, .month], from: summary.date)) ?? summary.date
+        }
+
+        return grouped.keys.sorted(by: >).map { monthStart in
+            YearMonthGroup(
+                monthStart: monthStart,
+                summaries: (grouped[monthStart] ?? []).sorted { $0.date < $1.date }
+            )
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                YearCalendarSummaryCard(summaries: healthStore.yearSummaries)
+
+                ForEach(monthGroups) { group in
+                    CalendarMonthSection(group: group)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 18)
+        }
+        .background(AppColor.screenBackground.ignoresSafeArea())
+        .navigationTitle("近一年日历")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct YearCalendarSummaryCard: View {
+    let summaries: [DailyHealthOverview]
+
+    private var recordedDays: Int {
+        summaries.filter(\.hasUserVisibleData).count
+    }
+
+    private var overBudgetDays: Int {
+        summaries.filter { $0.hasUserVisibleData && $0.balanceKcal < 0 }.count
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "calendar.badge.clock")
+                .font(.system(size: 21, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 52, height: 52)
+                .background(AppColor.healthGreen.gradient, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("每日余量记录")
+                    .font(.headline.weight(.semibold))
+
+                Text("已记录 \(recordedDays) 天，超出 \(overBudgetDays) 天")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .healthCard()
+    }
+}
+
+private struct YearMonthGroup: Identifiable {
+    let monthStart: Date
+    let summaries: [DailyHealthOverview]
+
+    var id: Date { monthStart }
+}
+
+private struct CalendarMonthSection: View {
+    let group: YearMonthGroup
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
+    private let weekdaySymbols = ["日", "一", "二", "三", "四", "五", "六"]
+
+    private var slots: [DailyHealthOverview?] {
+        guard let firstSummary = group.summaries.first else { return [] }
+        let calendar = Calendar.current
+        let weekdayOffset = calendar.component(.weekday, from: group.monthStart) - 1
+        let dayOffset = calendar.component(.day, from: firstSummary.date) - 1
+        return Array(repeating: nil, count: weekdayOffset + dayOffset) + group.summaries.map(Optional.some)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(monthTitle)
+                .font(.headline.weight(.semibold))
+
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(weekdaySymbols, id: \.self) { symbol in
+                    Text(symbol)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+
+                ForEach(slots.indices, id: \.self) { index in
+                    if let summary = slots[index] {
+                        NavigationLink {
+                            DailyCalendarDetailView(date: summary.date)
+                        } label: {
+                            DayBalanceCell(summary: summary)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Color.clear
+                            .frame(height: 58)
+                    }
+                }
+            }
+        }
+        .healthCard()
+    }
+
+    private var monthTitle: String {
+        group.monthStart.formatted(.dateTime.year().month(.wide))
+    }
+}
+
+private struct DayBalanceCell: View {
+    let summary: DailyHealthOverview
+
+    private var tint: Color {
+        summary.balanceKcal < 0 ? AppColor.warningRed : AppColor.healthGreen
+    }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text("\(Calendar.current.component(.day, from: summary.date))")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.primary)
+
+            Text(balanceText)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(summary.hasUserVisibleData ? tint : .secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, minHeight: 58)
+        .background(cellBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(summary.hasUserVisibleData ? tint.opacity(0.22) : Color.clear, lineWidth: 1)
+        }
+    }
+
+    private var balanceText: String {
+        guard summary.hasUserVisibleData else { return "--" }
+        let value = Int(summary.balanceKcal.rounded())
+        if value > 0 {
+            return "+\(value)"
+        }
+        return "\(value)"
+    }
+
+    private var cellBackground: Color {
+        guard summary.hasUserVisibleData else { return AppColor.softFill.opacity(0.45) }
+        return tint.opacity(0.12)
+    }
+}
+
+private struct DailyCalendarDetailView: View {
+    @EnvironmentObject private var healthStore: HealthDashboardStore
+    let date: Date
+
+    private var summary: DailyHealthOverview {
+        healthStore.yearSummaries.first {
+            Calendar.current.isDate($0.date, inSameDayAs: date)
+        } ?? DailyHealthOverview.empty(for: date)
+    }
+
+    private var records: [SavedMealRecord] {
+        healthStore.savedMealRecords.filter {
+            Calendar.current.isDate($0.consumedAt, inSameDayAs: date)
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                DailyBalanceHeaderCard(summary: summary)
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    DetailMetricCard(title: "摄入", value: summary.intakeKcal, unit: "kcal", icon: "fork.knife", tint: AppColor.healthGreen)
+                    DetailMetricCard(title: "总消耗", value: summary.totalBurnKcal, unit: "kcal", icon: "flame.fill", tint: AppColor.energyOrange)
+                    DetailMetricCard(title: "健身消耗", value: summary.activeEnergyKcal, unit: "kcal", icon: "figure.run", tint: AppColor.skyBlue)
+                    DetailMetricCard(
+                        title: "基础代谢",
+                        value: summary.basalEnergyKcal,
+                        unit: "kcal",
+                        icon: "person.fill.checkmark",
+                        tint: AppColor.violet
+                    )
+                }
+
+                DetailMetricCard(title: "步数", value: summary.stepCount, unit: "步", icon: "figure.walk", tint: AppColor.healthGreen)
+
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("当日饮食")
+                        .font(.headline.weight(.semibold))
+
+                    if records.isEmpty {
+                        Text("暂无饮食记录")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14)
+                            .background(AppColor.softFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    } else {
+                        ForEach(records) { record in
+                            MealRecordRow(record: record)
+                        }
+                    }
+                }
+                .healthCard()
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 18)
+        }
+        .background(AppColor.screenBackground.ignoresSafeArea())
+        .navigationTitle(date.formatted(.dateTime.month().day().weekday(.wide)))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct DailyBalanceHeaderCard: View {
+    let summary: DailyHealthOverview
+
+    private var isOverBudget: Bool {
+        summary.balanceKcal < 0
+    }
+
+    private var tint: Color {
+        isOverBudget ? AppColor.warningRed : AppColor.healthGreen
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: isOverBudget ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
+                .font(.system(size: 26, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 56, height: 56)
+                .background(tint.gradient, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(isOverBudget ? "当日超出" : "当日余量")
+                    .font(.headline.weight(.semibold))
+
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("\(abs(Int(summary.balanceKcal.rounded())))")
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(tint)
+
+                    Text("kcal")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .healthCard()
+    }
+}
+
+private struct DetailMetricCard: View {
+    let title: String
+    let value: Double
+    let unit: String
+    let icon: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 34, height: 34)
+                .background(tint.opacity(0.14), in: Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    Text("\(Int(value.rounded()))")
+                        .font(.headline.weight(.bold))
+                        .monospacedDigit()
+
+                    Text(unit)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .healthCard(padding: 14)
     }
 }
 
@@ -1214,7 +1484,7 @@ private struct ProfileView: View {
                     .background(AppColor.healthGreen.opacity(0.14), in: Circle())
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Apple Health")
+                    Text("Apple Health / Fitness")
                         .font(.headline.weight(.semibold))
 
                     Text(healthStore.healthKitStatusMessage)
@@ -1229,7 +1499,7 @@ private struct ProfileView: View {
                     await healthStore.requestHealthAuthorizationAndRefresh()
                 }
             } label: {
-                Label(healthStore.isSyncingHealthKit ? "同步中" : "从 Apple Health 同步", systemImage: "arrow.triangle.2.circlepath")
+                Label(healthStore.isSyncingHealthKit ? "同步中" : "同步健康与健身数据", systemImage: "arrow.triangle.2.circlepath")
                     .font(.subheadline.weight(.bold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
@@ -1395,39 +1665,11 @@ private struct ProfileEditorView: View {
     }
 }
 
-private struct ProgressRing<CenterContent: View>: View {
-    let progress: Double
-    let tint: Color
-    @ViewBuilder var centerContent: () -> CenterContent
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .stroke(AppColor.softFill, lineWidth: 14)
-
-            Circle()
-                .trim(from: 0, to: progress)
-                .stroke(
-                    tint.gradient,
-                    style: StrokeStyle(lineWidth: 14, lineCap: .round, lineJoin: .round)
-                )
-                .rotationEffect(.degrees(-90))
-
-            centerContent()
-        }
-        .animation(.snappy, value: progress)
-    }
-}
-
 private struct CalorieEntry: Identifiable {
     let id = UUID()
     let date: Date
     let intake: Int
     let burn: Int
-
-    static let sampleWeek: [CalorieEntry] = [
-        CalorieEntry(date: Date(), intake: 1980, burn: 2260)
-    ]
 }
 
 private struct QuickPrompt: Identifiable {
@@ -1440,6 +1682,7 @@ private struct QuickPrompt: Identifiable {
 private enum AppColor {
     static let healthGreen = Color(red: 0.11, green: 0.78, blue: 0.36)
     static let energyOrange = Color(red: 1.0, green: 0.55, blue: 0.18)
+    static let warningRed = Color(red: 0.95, green: 0.22, blue: 0.22)
     static let skyBlue = Color(red: 0.18, green: 0.55, blue: 0.95)
     static let violet = Color(red: 0.48, green: 0.39, blue: 0.95)
 
@@ -1477,12 +1720,9 @@ private extension View {
     }
 }
 
-private extension Date {
-    var weekdaySymbol: String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "E"
-        return formatter.string(from: self)
+private extension DailyHealthOverview {
+    var hasUserVisibleData: Bool {
+        intakeKcal > 0 || activeEnergyKcal > 0 || stepCount > 0 || !basalIsEstimated
     }
 }
 
