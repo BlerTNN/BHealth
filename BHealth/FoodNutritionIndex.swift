@@ -141,10 +141,74 @@ struct MealCalculationResult: Codable, Hashable, Identifiable {
     }
 }
 
+enum MealType: String, Codable, CaseIterable, Identifiable, Hashable {
+    case breakfast
+    case lunch
+    case dinner
+    case afternoonTea
+    case snack
+    case lateNight
+    case other
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .breakfast:
+            return "早餐"
+        case .lunch:
+            return "午餐"
+        case .dinner:
+            return "晚餐"
+        case .afternoonTea:
+            return "下午茶"
+        case .snack:
+            return "加餐/零食"
+        case .lateNight:
+            return "夜宵"
+        case .other:
+            return "其他"
+        }
+    }
+}
+
 struct SavedMealRecord: Codable, Identifiable, Hashable {
     let id: UUID
     let confirmedAt: Date
+    let consumedAt: Date
+    let mealType: MealType
     let calculation: MealCalculationResult
+
+    init(
+        id: UUID = UUID(),
+        confirmedAt: Date = Date(),
+        consumedAt: Date,
+        mealType: MealType,
+        calculation: MealCalculationResult
+    ) {
+        self.id = id
+        self.confirmedAt = confirmedAt
+        self.consumedAt = consumedAt
+        self.mealType = mealType
+        self.calculation = calculation
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case confirmedAt
+        case consumedAt
+        case mealType
+        case calculation
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        confirmedAt = try container.decode(Date.self, forKey: .confirmedAt)
+        consumedAt = try container.decodeIfPresent(Date.self, forKey: .consumedAt) ?? confirmedAt
+        mealType = try container.decodeIfPresent(MealType.self, forKey: .mealType) ?? .other
+        calculation = try container.decode(MealCalculationResult.self, forKey: .calculation)
+    }
 }
 
 final class FoodNutritionIndex {
@@ -229,7 +293,7 @@ struct FoodMentionExtractor {
             .flatMap { $0.components(separatedBy: "和") }
             .flatMap { $0.components(separatedBy: "以及") }
             .flatMap { $0.components(separatedBy: "还有") }
-            .map(cleaned)
+            .map { cleaned($0) }
             .filter { !$0.isEmpty }
 
         let parts = roughParts.isEmpty ? [cleaned(text)] : roughParts

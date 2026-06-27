@@ -22,19 +22,76 @@ struct AssistantMessage: Identifiable, Hashable {
     }
 
     static let sample: [AssistantMessage] = [
-        AssistantMessage(text: "你好，我是你的 AI 健康助手。你可以直接告诉我今天吃了什么，我会先追问关键细节，再用本地营养数据做粗略计算。", isFromUser: false)
+        AssistantMessage(text: "进入一个模式后，我会按这个模式帮你记录或分析。", isFromUser: false)
     ]
+}
+
+enum AssistantMode: String, CaseIterable, Identifiable, Hashable {
+    case foodLog
+    case historicalFoodLog
+    case healthCoach
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .foodLog:
+            return "记录饮食"
+        case .historicalFoodLog:
+            return "历史数据添加"
+        case .healthCoach:
+            return "健康助手"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .foodLog:
+            return "记录今天吃了什么、哪一餐和大致热量"
+        case .historicalFoodLog:
+            return "补录昨天或更早某一天的早餐、午餐等"
+        case .healthCoach:
+            return "基于历史摄入和消耗提供饮食与减重建议"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .foodLog:
+            return "fork.knife.circle.fill"
+        case .historicalFoodLog:
+            return "calendar.badge.plus"
+        case .healthCoach:
+            return "heart.text.square.fill"
+        }
+    }
+
+    var supportsMealSaving: Bool {
+        self != .healthCoach
+    }
+
+    var welcomeMessage: String {
+        switch self {
+        case .foodLog:
+            return "告诉我今天吃了什么，我会帮你估算热量。你也可以先选餐别，比如早餐、午餐、晚餐、加餐。"
+        case .historicalFoodLog:
+            return "选择要补录的日期和餐别，再告诉我那一餐吃了什么。我会保存到对应日期。"
+        case .healthCoach:
+            return "你可以问我饮食建议、热量缺口、近期趋势或大概减重速度。我会结合本地历史记录做判断。"
+        }
+    }
 }
 
 @MainActor
 final class FoodAssistantViewModel: ObservableObject {
     @Published var draftMessage = ""
-    @Published var apiKeyInput = ""
     @Published var messages = AssistantMessage.sample
     @Published var isSending = false
     @Published var hasAPIKey: Bool
-    @Published var apiKeyStatusMessage: String?
     @Published var pendingCalculation: MealCalculationResult?
+    @Published var selectedMode: AssistantMode?
+    @Published var selectedMealType: MealType = .lunch
+    @Published var selectedDate = Date()
     @Published private(set) var savedRecords: [SavedMealRecord]
 
     private let apiKeyStore: KeychainAPIKeyStore
@@ -42,12 +99,12 @@ final class FoodAssistantViewModel: ObservableObject {
     private let calculator: MealNutritionCalculator
     private let recordStore: MealRecordLocalStore
 
-    init(
-        apiKeyStore: KeychainAPIKeyStore = .shared,
-        engine: FoodAssistantEngine = FoodAssistantEngine(),
-        calculator: MealNutritionCalculator = MealNutritionCalculator(),
-        recordStore: MealRecordLocalStore = MealRecordLocalStore()
-    ) {
+    init() {
+        let apiKeyStore = KeychainAPIKeyStore.shared
+        let engine = FoodAssistantEngine()
+        let calculator = MealNutritionCalculator()
+        let recordStore = MealRecordLocalStore()
+
         self.apiKeyStore = apiKeyStore
         self.engine = engine
         self.calculator = calculator
@@ -56,35 +113,34 @@ final class FoodAssistantViewModel: ObservableObject {
         self.savedRecords = recordStore.load()
     }
 
-    func saveAPIKey() {
-        do {
-            try apiKeyStore.saveAPIKey(apiKeyInput)
-            apiKeyInput = ""
-            hasAPIKey = true
-            apiKeyStatusMessage = "DeepSeek API key 已保存到系统 Keychain。"
-        } catch {
-            apiKeyStatusMessage = error.localizedDescription
-        }
+    func refreshAPIKeyStatus() {
+        hasAPIKey = apiKeyStore.hasAPIKey
     }
 
-    func deleteAPIKey() {
-        do {
-            try apiKeyStore.deleteAPIKey()
-            hasAPIKey = false
-            apiKeyStatusMessage = "已从 Keychain 删除 DeepSeek API key。"
-        } catch {
-            apiKeyStatusMessage = error.localizedDescription
-        }
+    func openMode(_ mode: AssistantMode) {
+        selectedMode = mode
+        pendingCalculation = nil
+        selectedDate = mode == .foodLog ? Date() : selectedDate
+        messages = [
+            AssistantMessage(text: mode.welcomeMessage, isFromUser: false)
+        ]
     }
 
-    func sendDraftMessage() async {
+    func closeMode() {
+        selectedMode = nil
+        pendingCalculation = nil
+        draftMessage = ""
+        messages = AssistantMessage.sample
+    }
+
+    func sendDraftMessage(dashboardContext: String) async {
         let trimmed = draftMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         draftMessage = ""
-        await send(trimmed)
+        await send(trimmed, dashboardContext: dashboardContext)
     }
 
-    func send(_ text: String) async {
+    func send(_ text: String, dashboardContext: String) async {
         guard !isSending else { return }
 
         messages.append(AssistantMessage(text: text, isFromUser: true))
@@ -92,12 +148,13 @@ final class FoodAssistantViewModel: ObservableObject {
         pendingCalculation = nil
         defer { isSending = false }
 
-        let calculation = calculator.calculate(from: text)
+        let mode = selectedMode ?? .healthCoach
+        let calculation = mode.supportsMealSaving ? calculator.calculate(from: text) : nil
 
         guard hasAPIKey else {
             let reply = localFallbackReply(for: text, calculation: calculation, reason: "还没有保存 DeepSeek API key。")
             messages.append(AssistantMessage(text: reply, isFromUser: false))
-            pendingCalculation = calculation
+            pendingCalculation = mode.supportsMealSaving ? calculation : nil
             return
         }
 
@@ -105,17 +162,21 @@ final class FoodAssistantViewModel: ObservableObject {
             let aiReply = try await engine.respond(
                 userText: text,
                 history: messages,
-                calculation: calculation
+                calculation: calculation,
+                mode: mode,
+                mealType: selectedMealType,
+                consumedAt: selectedDate,
+                dashboardContext: dashboardContext
             )
 
             messages.append(AssistantMessage(text: aiReply.reply, isFromUser: false))
-            if aiReply.shouldOfferSave {
+            if mode.supportsMealSaving, aiReply.shouldOfferSave {
                 pendingCalculation = aiReply.estimatedCalculation(for: text) ?? calculation
             }
         } catch {
             let reply = localFallbackReply(for: text, calculation: calculation, reason: error.localizedDescription)
             messages.append(AssistantMessage(text: reply, isFromUser: false))
-            pendingCalculation = calculation
+            pendingCalculation = mode.supportsMealSaving ? calculation : nil
         }
     }
 
@@ -123,20 +184,18 @@ final class FoodAssistantViewModel: ObservableObject {
         guard let pendingCalculation else { return }
 
         let record = SavedMealRecord(
-            id: UUID(),
             confirmedAt: Date(),
+            consumedAt: selectedDate,
+            mealType: selectedMealType,
             calculation: pendingCalculation
         )
 
-        var records = recordStore.load()
-        records.insert(record, at: 0)
-        recordStore.save(records)
-        savedRecords = records
+        recordStore.add(record)
+        savedRecords = recordStore.load()
         self.pendingCalculation = nil
-        NotificationCenter.default.post(name: .mealRecordsDidChange, object: nil)
 
         let kcal = Int(record.calculation.totalEnergyKcal.rounded())
-        messages.append(AssistantMessage(text: "已确认并保存到本地饮食记录：约 \(kcal) kcal。", isFromUser: false))
+        messages.append(AssistantMessage(text: "已保存到本地记录：\(record.consumedAt.formatted(date: .abbreviated, time: .omitted)) \(record.mealType.title)，约 \(kcal) kcal。", isFromUser: false))
     }
 
     private func localFallbackReply(for text: String, calculation: MealCalculationResult?, reason: String) -> String {
@@ -171,9 +230,20 @@ struct FoodAssistantEngine {
     func respond(
         userText: String,
         history: [AssistantMessage],
-        calculation: MealCalculationResult?
+        calculation: MealCalculationResult?,
+        mode: AssistantMode,
+        mealType: MealType,
+        consumedAt: Date,
+        dashboardContext: String
     ) async throws -> AssistantAIReply {
-        let context = PromptContext(userText: userText, calculation: calculation)
+        let context = PromptContext(
+            userText: userText,
+            mode: mode.title,
+            mealType: mealType.title,
+            consumedAt: consumedAt,
+            dashboardContext: dashboardContext,
+            calculation: calculation
+        )
         let contextData = try JSONEncoder.promptEncoder.encode(context)
         let contextJSON = String(data: contextData, encoding: .utf8) ?? "{}"
 
@@ -190,7 +260,8 @@ struct FoodAssistantEngine {
         5. 每次最多追问 1-2 个最影响结果的信息。如果信息已足够，可以给区间估算。
         6. 只有用户明确确认后才能保存记录。你现在只能建议用户确认，不能声称已经保存。
         7. 不要输出伪精确热量，优先使用整数和范围。
-        8. 输出严格 JSON，不要 Markdown，不要代码块。
+        8. 如果模式是“健康助手”，提供通用建议、趋势判断、粗略减重估计，不要要求保存饮食记录，should_offer_save 必须为 false。
+        9. 输出严格 JSON，不要 Markdown，不要代码块。
 
         JSON schema:
         {
@@ -211,10 +282,17 @@ struct FoodAssistantEngine {
         \(contextJSON)
 
         请基于上面的本地计算上下文回复用户。
-        如果有 calculation，把它作为参考证据，结合用户描述判断是否需要修正或补充。
-        如果没有 calculation，但用户描述足够可估算，可以给低可信度区间估算，并在 JSON 中填写 estimated_energy_kcal / energy_low_kcal / energy_high_kcal。
-        如果信息明显不足，追问最影响结果的 1-2 个信息，例如食物、份量、克重、品牌/地区或配料。
-        只要回复里询问“是否确认保存”，should_offer_save 就设为 true。
+        模式是：\(mode.title)。
+        如果是记录饮食或历史数据添加：
+        - 把 meal_type 和 consumed_at 纳入回复。
+        - 如果有 calculation，把它作为参考证据，结合用户描述判断是否需要修正或补充。
+        - 如果没有 calculation，但用户描述足够可估算，可以给低可信度区间估算，并填写 estimated_energy_kcal / energy_low_kcal / energy_high_kcal。
+        - 信息不足时追问食物、份量、克重、品牌/地区或配料中最关键的 1-2 项。
+        - 只要回复里询问“是否确认保存”，should_offer_save 就设为 true。
+        如果是健康助手：
+        - 使用 dashboard_context 总结用户近况。
+        - 可以估算热量缺口对应的大概体重变化，但必须说明只是粗略推断。
+        - 不要填写待保存热量，should_offer_save=false。
         """
 
         let messages = [DeepSeekMessage(role: "system", content: systemPrompt)]
@@ -310,17 +388,47 @@ struct MealRecordLocalStore {
 
     func load() -> [SavedMealRecord] {
         guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
-        return (try? JSONDecoder.recordDecoder.decode([SavedMealRecord].self, from: data)) ?? []
+        let records = (try? JSONDecoder.recordDecoder.decode([SavedMealRecord].self, from: data)) ?? []
+        return records.sorted { $0.consumedAt > $1.consumedAt }
     }
 
     func save(_ records: [SavedMealRecord]) {
         guard let data = try? JSONEncoder.recordEncoder.encode(records) else { return }
         UserDefaults.standard.set(data, forKey: key)
     }
+
+    func add(_ record: SavedMealRecord) {
+        var records = load()
+        records.insert(record, at: 0)
+        save(records)
+        NotificationCenter.default.post(name: .mealRecordsDidChange, object: nil)
+    }
+
+    func update(_ record: SavedMealRecord) {
+        var records = load()
+        if let index = records.firstIndex(where: { $0.id == record.id }) {
+            records[index] = record
+        } else {
+            records.insert(record, at: 0)
+        }
+        save(records)
+        NotificationCenter.default.post(name: .mealRecordsDidChange, object: nil)
+    }
+
+    func delete(_ record: SavedMealRecord) {
+        var records = load()
+        records.removeAll { $0.id == record.id }
+        save(records)
+        NotificationCenter.default.post(name: .mealRecordsDidChange, object: nil)
+    }
 }
 
 private struct PromptContext: Codable {
     let userText: String
+    let mode: String
+    let mealType: String
+    let consumedAt: Date
+    let dashboardContext: String
     let calculation: MealCalculationResult?
 }
 

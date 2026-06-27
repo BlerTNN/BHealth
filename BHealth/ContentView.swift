@@ -72,10 +72,10 @@ private struct OverviewView: View {
         max(totalBurn, 1800)
     }
 
-    private var weeklyEntries: [CalorieEntry] {
-        healthStore.weeklySummaries.map { summary in
+    private var historyEntries: [CalorieEntry] {
+        healthStore.yearSummaries.map { summary in
             CalorieEntry(
-                day: summary.date.weekdaySymbol,
+                date: summary.date,
                 intake: Int(summary.intakeKcal.rounded()),
                 burn: Int(summary.totalBurnKcal.rounded())
             )
@@ -86,19 +86,6 @@ private struct OverviewView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    OverviewHeader(statusMessage: healthStore.healthKitStatusMessage)
-
-                    HealthConnectionCard(
-                        isAvailable: healthStore.healthKitAvailable,
-                        isSyncing: healthStore.isSyncingHealthKit,
-                        statusMessage: healthStore.healthKitStatusMessage,
-                        syncAction: {
-                            Task {
-                                await healthStore.requestHealthAuthorizationAndRefresh()
-                            }
-                        }
-                    )
-
                     CalorieSummaryCard(
                         intake: intake,
                         intakeTarget: intakeTarget,
@@ -124,105 +111,18 @@ private struct OverviewView: View {
                         )
                     }
 
-                    WeeklyChartCard(entries: weeklyEntries)
+                    HistoryTrendChartCard(entries: historyEntries)
 
                     InsightCard(summary: today)
+
+                    MealHistorySection(records: healthStore.savedMealRecords)
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 18)
             }
             .background(AppColor.screenBackground.ignoresSafeArea())
             .navigationTitle("今日总览")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        Task {
-                            await healthStore.requestHealthAuthorizationAndRefresh()
-                        }
-                    } label: {
-                        Label("同步", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .disabled(healthStore.isSyncingHealthKit || !healthStore.healthKitAvailable)
-                }
-            }
         }
-    }
-}
-
-private struct OverviewHeader: View {
-    let statusMessage: String
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(AppColor.healthGreen.opacity(0.16))
-                    .frame(width: 48, height: 48)
-
-                Image(systemName: "waveform.path.ecg")
-                    .font(.system(size: 23, weight: .semibold))
-                    .foregroundStyle(AppColor.healthGreen)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("BHealth")
-                    .font(.title2.weight(.bold))
-                    .foregroundStyle(.primary)
-
-                Text(statusMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            Spacer()
-        }
-        .padding(.top, 4)
-    }
-}
-
-private struct HealthConnectionCard: View {
-    let isAvailable: Bool
-    let isSyncing: Bool
-    let statusMessage: String
-    let syncAction: () -> Void
-
-    var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: isAvailable ? "heart.text.square.fill" : "exclamationmark.triangle.fill")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(isAvailable ? AppColor.healthGreen : AppColor.energyOrange)
-                .frame(width: 40, height: 40)
-                .background((isAvailable ? AppColor.healthGreen : AppColor.energyOrange).opacity(0.14), in: Circle())
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Apple Health")
-                    .font(.headline.weight(.semibold))
-
-                Text(statusMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            Spacer()
-
-            Button(action: syncAction) {
-                Group {
-                    if isSyncing {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 16, weight: .bold))
-                    }
-                }
-                .frame(width: 38, height: 38)
-            }
-            .buttonStyle(.bordered)
-            .disabled(isSyncing || !isAvailable)
-        }
-        .healthCard()
     }
 }
 
@@ -355,17 +255,17 @@ private struct MetricCard: View {
     }
 }
 
-private struct WeeklyChartCard: View {
+private struct HistoryTrendChartCard: View {
     let entries: [CalorieEntry]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("近 7 日趋势")
+                    Text("近一年趋势")
                         .font(.headline.weight(.semibold))
 
-                    Text("摄入与消耗的粗略对比")
+                    Text("横向滑动查看每天摄入与消耗")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -381,7 +281,7 @@ private struct WeeklyChartCard: View {
 
             Chart(entries) { entry in
                 BarMark(
-                    x: .value("日期", entry.day),
+                    x: .value("日期", entry.date, unit: .day),
                     y: .value("卡路里", entry.intake)
                 )
                 .foregroundStyle(by: .value("类型", "摄入"))
@@ -389,7 +289,7 @@ private struct WeeklyChartCard: View {
                 .cornerRadius(6)
 
                 BarMark(
-                    x: .value("日期", entry.day),
+                    x: .value("日期", entry.date, unit: .day),
                     y: .value("卡路里", entry.burn)
                 )
                 .foregroundStyle(by: .value("类型", "消耗"))
@@ -404,6 +304,15 @@ private struct WeeklyChartCard: View {
             .chartYAxis {
                 AxisMarks(position: .leading)
             }
+            .chartXAxis {
+                AxisMarks(values: .stride(by: .month)) { _ in
+                    AxisGridLine()
+                    AxisValueLabel(format: .dateTime.month(.abbreviated))
+                }
+            }
+            .chartScrollableAxes(.horizontal)
+            .chartXVisibleDomain(length: 60 * 60 * 24 * 31)
+            .chartScrollPosition(initialX: Date())
             .frame(height: 190)
         }
         .healthCard()
@@ -430,7 +339,7 @@ private struct InsightCard: View {
 
     private var message: String {
         if summary.intakeKcal == 0 {
-            return "今天还没有确认保存的饮食记录。你可以到 AI 助手页用自然语言记录一餐，总览会自动同步摄入热量。"
+            return "今天还没有确认保存的饮食记录。你可以到 AI 助手页用自然语言记录一餐，总览会自动更新摄入热量。"
         }
 
         if summary.balanceKcal >= 250 {
@@ -445,101 +354,516 @@ private struct InsightCard: View {
     }
 }
 
-private struct AssistantView: View {
-    @StateObject private var viewModel = FoodAssistantViewModel()
+private struct MealHistorySection: View {
+    @EnvironmentObject private var healthStore: HealthDashboardStore
+    @State private var showsHistory = false
 
-    private let quickPrompts: [QuickPrompt] = [
-        QuickPrompt(title: "记录饮食", icon: "fork.knife", message: "我早餐吃了一个鸡蛋、一杯拿铁和一片吐司，帮我估算热量。"),
-        QuickPrompt(title: "运动建议", icon: "figure.cooldown", message: "今天我只走了 3000 步，晚上适合做什么运动？"),
-        QuickPrompt(title: "健康建议", icon: "heart.text.square", message: "根据今天的摄入和消耗，给我一个晚餐建议。")
-    ]
+    let records: [SavedMealRecord]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("历史饮食记录")
+                        .font(.headline.weight(.semibold))
+
+                    Text(records.isEmpty ? "暂无已确认记录" : "共 \(records.count) 条，可查看和修改")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    showsHistory = true
+                } label: {
+                    Image(systemName: "list.bullet.rectangle")
+                        .font(.system(size: 16, weight: .bold))
+                        .frame(width: 38, height: 38)
+                }
+                .buttonStyle(.bordered)
+            }
+
+            ForEach(records.prefix(3)) { record in
+                MealRecordRow(record: record)
+            }
+
+            if records.count > 3 {
+                Button {
+                    showsHistory = true
+                } label: {
+                    Text("查看全部记录")
+                        .font(.subheadline.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(AppColor.healthGreen)
+            }
+        }
+        .healthCard()
+        .sheet(isPresented: $showsHistory) {
+            MealHistoryListView()
+                .environmentObject(healthStore)
+        }
+    }
+}
+
+private struct MealRecordRow: View {
+    let record: SavedMealRecord
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "fork.knife")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(AppColor.healthGreen)
+                .frame(width: 32, height: 32)
+                .background(AppColor.healthGreen.opacity(0.14), in: Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(recordTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+
+                Text("\(record.consumedAt.formatted(date: .abbreviated, time: .omitted)) · \(record.mealType.title)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Text("\(Int(record.calculation.totalEnergyKcal.rounded())) kcal")
+                .font(.subheadline.weight(.bold))
+                .monospacedDigit()
+        }
+        .padding(12)
+        .background(AppColor.softFill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var recordTitle: String {
+        record.calculation.items.first?.rawText.isEmpty == false
+            ? record.calculation.items.first?.rawText ?? "饮食记录"
+            : record.calculation.items.first?.matchedFoodName ?? "饮食记录"
+    }
+}
+
+private struct MealHistoryListView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var healthStore: HealthDashboardStore
+    @State private var editingRecord: SavedMealRecord?
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            AssistantHeader()
-
-                            APIKeySetupCard(
-                                apiKeyInput: $viewModel.apiKeyInput,
-                                hasAPIKey: viewModel.hasAPIKey,
-                                statusMessage: viewModel.apiKeyStatusMessage,
-                                saveAction: viewModel.saveAPIKey,
-                                deleteAction: viewModel.deleteAPIKey
-                            )
-
-                            quickPromptRow
-
-                            VStack(spacing: 12) {
-                                ForEach(viewModel.messages) { message in
-                                    ChatBubble(message: message)
-                                        .id(message.id)
-                                }
-
-                                if viewModel.isSending {
-                                    LoadingBubble()
-                                        .id("loading")
-                                }
-
-                                if let calculation = viewModel.pendingCalculation {
-                                    MealCalculationDraftCard(
-                                        calculation: calculation,
-                                        saveAction: viewModel.savePendingCalculation
-                                    )
-                                    .id(calculation.id)
-                                }
+            List {
+                if healthStore.savedMealRecords.isEmpty {
+                    ContentUnavailableView("暂无记录", systemImage: "fork.knife", description: Text("在 AI 助手中确认保存后会出现在这里。"))
+                } else {
+                    ForEach(healthStore.savedMealRecords) { record in
+                        Button {
+                            editingRecord = record
+                        } label: {
+                            MealRecordRow(record: record)
+                        }
+                        .buttonStyle(.plain)
+                        .swipeActions {
+                            Button(role: .destructive) {
+                                healthStore.deleteMealRecord(record)
+                            } label: {
+                                Label("删除", systemImage: "trash")
                             }
-                        }
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 18)
-                    }
-                    .onChange(of: viewModel.messages.count) { _, _ in
-                        withAnimation(.snappy) {
-                            proxy.scrollTo(viewModel.messages.last?.id, anchor: .bottom)
-                        }
-                    }
-                    .onChange(of: viewModel.isSending) { _, isSending in
-                        guard isSending else { return }
-                        withAnimation(.snappy) {
-                            proxy.scrollTo("loading", anchor: .bottom)
-                        }
-                    }
-                    .onChange(of: viewModel.pendingCalculation?.id) { _, id in
-                        guard let id else { return }
-                        withAnimation(.snappy) {
-                            proxy.scrollTo(id, anchor: .bottom)
                         }
                     }
                 }
+            }
+            .navigationTitle("历史记录")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("完成") {
+                        dismiss()
+                    }
+                }
+            }
+            .sheet(item: $editingRecord) { record in
+                MealRecordEditorView(record: record) { updatedRecord in
+                    healthStore.updateMealRecord(updatedRecord)
+                } deleteAction: {
+                    healthStore.deleteMealRecord(record)
+                }
+            }
+        }
+    }
+}
 
-                ChatInputBar(
-                    text: $viewModel.draftMessage,
-                    isSending: viewModel.isSending,
-                    sendAction: {
-                        Task {
-                            await viewModel.sendDraftMessage()
+private struct MealRecordEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var foodName: String
+    @State private var kcal: String
+    @State private var consumedAt: Date
+    @State private var mealType: MealType
+
+    let record: SavedMealRecord
+    let saveAction: (SavedMealRecord) -> Void
+    let deleteAction: () -> Void
+
+    init(
+        record: SavedMealRecord,
+        saveAction: @escaping (SavedMealRecord) -> Void,
+        deleteAction: @escaping () -> Void
+    ) {
+        self.record = record
+        self.saveAction = saveAction
+        self.deleteAction = deleteAction
+        _foodName = State(initialValue: record.calculation.items.first?.rawText ?? record.calculation.items.first?.matchedFoodName ?? "")
+        _kcal = State(initialValue: "\(Int(record.calculation.totalEnergyKcal.rounded()))")
+        _consumedAt = State(initialValue: record.consumedAt)
+        _mealType = State(initialValue: record.mealType)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("记录") {
+                    TextField("吃的什么", text: $foodName)
+                    TextField("热量 kcal", text: $kcal)
+#if os(iOS)
+                        .keyboardType(.numberPad)
+#endif
+                    Picker("餐别", selection: $mealType) {
+                        ForEach(MealType.allCases) { type in
+                            Text(type.title).tag(type)
                         }
                     }
-                )
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(.regularMaterial)
+                    DatePicker("日期", selection: $consumedAt, displayedComponents: .date)
+                }
+
+                Section {
+                    Button(role: .destructive) {
+                        deleteAction()
+                        dismiss()
+                    } label: {
+                        Label("删除记录", systemImage: "trash")
+                    }
+                }
             }
-            .background(AppColor.screenBackground.ignoresSafeArea())
-            .navigationTitle("AI 助手")
+            .navigationTitle("编辑记录")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") {
+                        saveAction(updatedRecord)
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                    .disabled(Double(kcal) == nil || foodName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
         }
     }
 
-    private var quickPromptRow: some View {
+    private var updatedRecord: SavedMealRecord {
+        let energy = Double(kcal) ?? record.calculation.totalEnergyKcal
+        let trimmedName = foodName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let item = MealItemCalculation(
+            rawText: trimmedName,
+            matchedFoodName: trimmedName,
+            fdcId: record.calculation.items.first?.fdcId ?? -1,
+            estimatedGrams: record.calculation.items.first?.estimatedGrams ?? 0,
+            energyKcal: energy,
+            proteinG: nil,
+            fatG: nil,
+            carbohydrateG: nil,
+            confidence: record.calculation.confidence,
+            sourceName: "用户编辑",
+            sourceVersion: "manual",
+            assumptions: ["用户手动编辑历史记录。"]
+        )
+        let calculation = MealCalculationResult(
+            id: record.calculation.id,
+            createdAt: record.calculation.createdAt,
+            items: [item],
+            totalEnergyKcal: energy,
+            rangeLowKcal: energy,
+            rangeHighKcal: energy,
+            confidence: record.calculation.confidence,
+            assumptions: ["用户手动编辑历史记录。"],
+            sourceSummary: "用户编辑"
+        )
+
+        return SavedMealRecord(
+            id: record.id,
+            confirmedAt: record.confirmedAt,
+            consumedAt: consumedAt,
+            mealType: mealType,
+            calculation: calculation
+        )
+    }
+}
+
+private struct AssistantView: View {
+    @EnvironmentObject private var healthStore: HealthDashboardStore
+    @StateObject private var viewModel = FoodAssistantViewModel()
+    @FocusState private var isInputFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let mode = viewModel.selectedMode {
+                    assistantChat(mode: mode)
+                } else {
+                    AssistantModeSelectionView { mode in
+                        viewModel.openMode(mode)
+                    }
+                }
+            }
+            .background(AppColor.screenBackground.ignoresSafeArea())
+            .navigationTitle("AI 助手")
+            .onAppear {
+                viewModel.refreshAPIKeyStatus()
+            }
+        }
+    }
+
+    private func assistantChat(mode: AssistantMode) -> some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        AssistantHeader(mode: mode)
+
+                        if mode.supportsMealSaving {
+                            MealLoggingContextCard(
+                                mode: mode,
+                                mealType: $viewModel.selectedMealType,
+                                date: $viewModel.selectedDate
+                            )
+                        }
+
+                        QuickPromptRow(mode: mode) { message in
+                            Task {
+                                await viewModel.send(message, dashboardContext: healthStore.assistantContextSummary)
+                            }
+                        }
+
+                        VStack(spacing: 12) {
+                            ForEach(viewModel.messages) { message in
+                                ChatBubble(message: message)
+                                    .id(message.id)
+                            }
+
+                            if viewModel.isSending {
+                                LoadingBubble()
+                                    .id("loading")
+                            }
+
+                            if let calculation = viewModel.pendingCalculation {
+                                MealCalculationDraftCard(
+                                    calculation: calculation,
+                                    saveAction: viewModel.savePendingCalculation
+                                )
+                                .id(calculation.id)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 18)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .onTapGesture {
+                    isInputFocused = false
+                }
+                .onChange(of: viewModel.messages.count) { _, _ in
+                    withAnimation(.snappy) {
+                        proxy.scrollTo(viewModel.messages.last?.id, anchor: .bottom)
+                    }
+                }
+                .onChange(of: viewModel.isSending) { _, isSending in
+                    guard isSending else { return }
+                    withAnimation(.snappy) {
+                        proxy.scrollTo("loading", anchor: .bottom)
+                    }
+                }
+                .onChange(of: viewModel.pendingCalculation?.id) { _, id in
+                    guard let id else { return }
+                    withAnimation(.snappy) {
+                        proxy.scrollTo(id, anchor: .bottom)
+                    }
+                }
+            }
+
+            ChatInputBar(
+                text: $viewModel.draftMessage,
+                isSending: viewModel.isSending,
+                isFocused: $isInputFocused,
+                sendAction: {
+                    Task {
+                        await viewModel.sendDraftMessage(dashboardContext: healthStore.assistantContextSummary)
+                    }
+                }
+            )
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(.regularMaterial)
+        }
+        .navigationTitle(mode.title)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    viewModel.closeMode()
+                } label: {
+                    Label("返回", systemImage: "chevron.left")
+                }
+            }
+
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("完成") {
+                    isInputFocused = false
+                }
+            }
+        }
+    }
+}
+
+private struct AssistantModeSelectionView: View {
+    let selectMode: (AssistantMode) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("选择助手")
+                    .font(.largeTitle.weight(.bold))
+                    .padding(.top, 8)
+
+                ForEach(AssistantMode.allCases) { mode in
+                    Button {
+                        selectMode(mode)
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: mode.icon)
+                                .font(.system(size: 24, weight: .bold))
+                                .foregroundStyle(AppColor.healthGreen)
+                                .frame(width: 54, height: 54)
+                                .background(AppColor.healthGreen.opacity(0.14), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(mode.title)
+                                    .font(.headline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+
+                                Text(mode.subtitle)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .healthCard()
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 18)
+        }
+    }
+}
+
+private struct AssistantHeader: View {
+    let mode: AssistantMode
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(AppColor.healthGreen.gradient)
+                    .frame(width: 56, height: 56)
+
+                Image(systemName: mode.icon)
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(mode.title)
+                    .font(.title3.weight(.bold))
+
+                Text(mode.subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineSpacing(3)
+            }
+        }
+        .healthCard()
+    }
+}
+
+private struct MealLoggingContextCard: View {
+    let mode: AssistantMode
+    @Binding var mealType: MealType
+    @Binding var date: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Picker("餐别", selection: $mealType) {
+                ForEach(MealType.allCases) { type in
+                    Text(type.title).tag(type)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if mode == .historicalFoodLog {
+                DatePicker("记录日期", selection: $date, displayedComponents: .date)
+                    .font(.subheadline.weight(.semibold))
+            } else {
+                Label("记录到今天 · \(mealType.title)", systemImage: "calendar")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .healthCard()
+    }
+}
+
+private struct QuickPromptRow: View {
+    let mode: AssistantMode
+    let sendAction: (String) -> Void
+
+    private var prompts: [QuickPrompt] {
+        switch mode {
+        case .foodLog:
+            return [
+                QuickPrompt(title: "早餐示例", icon: "sunrise.fill", message: "我早餐吃了一个鸡蛋、一杯拿铁和一片吐司。"),
+                QuickPrompt(title: "午餐示例", icon: "fork.knife", message: "午餐吃了鸡胸肉沙拉，帮我估算热量。")
+            ]
+        case .historicalFoodLog:
+            return [
+                QuickPrompt(title: "昨日早餐", icon: "calendar.badge.clock", message: "补录这一天早餐：两个鸡蛋和一杯牛奶。"),
+                QuickPrompt(title: "补录晚餐", icon: "moon.fill", message: "这一天晚餐吃了牛肉饭，大概一碗。")
+            ]
+        case .healthCoach:
+            return [
+                QuickPrompt(title: "饮食建议", icon: "leaf.fill", message: "根据我的历史记录，给我今天的饮食建议。"),
+                QuickPrompt(title: "减重趋势", icon: "chart.line.downtrend.xyaxis", message: "按最近摄入和消耗，大概能减多少体重？")
+            ]
+        }
+    }
+
+    var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
-                ForEach(quickPrompts) { prompt in
+                ForEach(prompts) { prompt in
                     Button {
-                        Task {
-                            await viewModel.send(prompt.message)
-                        }
+                        sendAction(prompt.message)
                     } label: {
                         Label(prompt.title, systemImage: prompt.icon)
                             .font(.subheadline.weight(.semibold))
@@ -553,33 +877,6 @@ private struct AssistantView: View {
             }
             .padding(.vertical, 2)
         }
-    }
-}
-
-private struct AssistantHeader: View {
-    var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(AppColor.healthGreen.gradient)
-                    .frame(width: 56, height: 56)
-
-                Image(systemName: "sparkles")
-                    .font(.system(size: 24, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("你的健康记录搭档")
-                    .font(.title3.weight(.bold))
-
-                Text("告诉我你吃了什么、做了什么运动，我会帮你整理成当天热量记录。")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineSpacing(3)
-            }
-        }
-        .healthCard()
     }
 }
 
@@ -786,11 +1083,13 @@ private struct MealCalculationDraftCard: View {
 private struct ChatInputBar: View {
     @Binding var text: String
     let isSending: Bool
+    var isFocused: FocusState<Bool>.Binding
     let sendAction: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
             TextField("输入饮食、运动或健康问题", text: $text, axis: .vertical)
+                .focused(isFocused)
                 .lineLimit(1...4)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
@@ -825,6 +1124,9 @@ private struct ChatInputBar: View {
 private struct ProfileView: View {
     @EnvironmentObject private var healthStore: HealthDashboardStore
     @State private var isEditingProfile = false
+    @State private var apiKeyInput = ""
+    @State private var hasAPIKey = KeychainAPIKeyStore.shared.hasAPIKey
+    @State private var apiKeyStatusMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -839,6 +1141,14 @@ private struct ProfileView: View {
                         ProfileMetricCard(title: "目标体重", value: formatNumber(healthStore.profile.targetWeightKg), unit: "kg", icon: "target", tint: AppColor.violet)
                     }
 
+                    APIKeySetupCard(
+                        apiKeyInput: $apiKeyInput,
+                        hasAPIKey: hasAPIKey,
+                        statusMessage: apiKeyStatusMessage,
+                        saveAction: saveAPIKey,
+                        deleteAction: deleteAPIKey
+                    )
+
                     syncCard
                 }
                 .padding(.horizontal, 20)
@@ -846,6 +1156,9 @@ private struct ProfileView: View {
             }
             .background(AppColor.screenBackground.ignoresSafeArea())
             .navigationTitle("我的")
+            .onAppear {
+                hasAPIKey = KeychainAPIKeyStore.shared.hasAPIKey
+            }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -946,6 +1259,27 @@ private struct ProfileView: View {
     private func formatInteger(_ value: Int?) -> String {
         guard let value else { return "--" }
         return "\(value)"
+    }
+
+    private func saveAPIKey() {
+        do {
+            try KeychainAPIKeyStore.shared.saveAPIKey(apiKeyInput)
+            apiKeyInput = ""
+            hasAPIKey = true
+            apiKeyStatusMessage = "DeepSeek API key 已保存到系统 Keychain。"
+        } catch {
+            apiKeyStatusMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteAPIKey() {
+        do {
+            try KeychainAPIKeyStore.shared.deleteAPIKey()
+            hasAPIKey = false
+            apiKeyStatusMessage = "已从 Keychain 删除 DeepSeek API key。"
+        } catch {
+            apiKeyStatusMessage = error.localizedDescription
+        }
     }
 }
 
@@ -1087,18 +1421,12 @@ private struct ProgressRing<CenterContent: View>: View {
 
 private struct CalorieEntry: Identifiable {
     let id = UUID()
-    let day: String
+    let date: Date
     let intake: Int
     let burn: Int
 
     static let sampleWeek: [CalorieEntry] = [
-        CalorieEntry(day: "一", intake: 1980, burn: 2260),
-        CalorieEntry(day: "二", intake: 2160, burn: 2140),
-        CalorieEntry(day: "三", intake: 1740, burn: 2310),
-        CalorieEntry(day: "四", intake: 1880, burn: 2180),
-        CalorieEntry(day: "五", intake: 1680, burn: 2100),
-        CalorieEntry(day: "六", intake: 2050, burn: 2360),
-        CalorieEntry(day: "日", intake: 1920, burn: 2200)
+        CalorieEntry(date: Date(), intake: 1980, burn: 2260)
     ]
 }
 

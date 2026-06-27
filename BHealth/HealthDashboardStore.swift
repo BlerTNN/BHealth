@@ -56,6 +56,7 @@ final class HealthDashboardStore: ObservableObject {
     @Published private(set) var profile: UserHealthProfile
     @Published private(set) var today: DailyHealthOverview
     @Published private(set) var weeklySummaries: [DailyHealthOverview]
+    @Published private(set) var yearSummaries: [DailyHealthOverview]
     @Published private(set) var savedMealRecords: [SavedMealRecord]
     @Published var healthKitStatusMessage: String
     @Published var isSyncingHealthKit = false
@@ -75,6 +76,7 @@ final class HealthDashboardStore: ObservableObject {
         savedMealRecords = mealRecordStore.load()
         today = DailyHealthOverview.empty(for: Date())
         weeklySummaries = []
+        yearSummaries = []
         healthKitStatusMessage = healthKitService.isAvailable ? "尚未同步 Apple Health" : "当前设备不可用 HealthKit"
 
         recomputeSummaries()
@@ -122,6 +124,34 @@ final class HealthDashboardStore: ObservableObject {
         recomputeSummaries()
     }
 
+    func updateMealRecord(_ record: SavedMealRecord) {
+        mealRecordStore.update(record)
+        reloadMealRecords()
+    }
+
+    func deleteMealRecord(_ record: SavedMealRecord) {
+        mealRecordStore.delete(record)
+        reloadMealRecords()
+    }
+
+    var assistantContextSummary: String {
+        let averageIntake = average(of: yearSummaries.suffix(30).map(\.intakeKcal))
+        let averageBurn = average(of: yearSummaries.suffix(30).map(\.totalBurnKcal))
+        let averageBalance = averageBurn - averageIntake
+        let recentRecords = savedMealRecords
+            .prefix(8)
+            .map { record in
+                "\(record.consumedAt.formatted(date: .numeric, time: .omitted)) \(record.mealType.title) \(Int(record.calculation.totalEnergyKcal.rounded()))kcal"
+            }
+            .joined(separator: "；")
+
+        return """
+        今日摄入 \(Int(today.intakeKcal.rounded())) kcal，总消耗 \(Int(today.totalBurnKcal.rounded())) kcal，运动消耗 \(Int(today.activeEnergyKcal.rounded())) kcal。
+        近30日平均摄入 \(Int(averageIntake.rounded())) kcal，平均消耗 \(Int(averageBurn.rounded())) kcal，平均热量差 \(Int(averageBalance.rounded())) kcal/日。
+        近期饮食记录：\(recentRecords.isEmpty ? "暂无" : recentRecords)
+        """
+    }
+
     private func merge(snapshot: HealthKitSnapshot) {
         if let heightCm = snapshot.heightCm {
             profile.heightCm = heightCm
@@ -144,7 +174,7 @@ final class HealthDashboardStore: ObservableObject {
         let todayStart = calendar.startOfDay(for: Date())
         var summaries: [DailyHealthOverview] = []
 
-        for offset in stride(from: -6, through: 0, by: 1) {
+        for offset in stride(from: -364, through: 0, by: 1) {
             guard let day = calendar.date(byAdding: .day, value: offset, to: todayStart) else { continue }
             let intake = intakeKcal(on: day)
             let metrics = healthMetricsByDay[day]
@@ -164,16 +194,23 @@ final class HealthDashboardStore: ObservableObject {
             )
         }
 
-        weeklySummaries = summaries
+        yearSummaries = summaries
+        weeklySummaries = Array(summaries.suffix(7))
         today = summaries.last ?? DailyHealthOverview.empty(for: Date())
     }
 
     private func intakeKcal(on day: Date) -> Double {
         let calendar = Calendar.current
         return savedMealRecords.reduce(0) { partial, record in
-            guard calendar.isDate(record.confirmedAt, inSameDayAs: day) else { return partial }
+            guard calendar.isDate(record.consumedAt, inSameDayAs: day) else { return partial }
             return partial + record.calculation.totalEnergyKcal
         }
+    }
+
+    private func average(of values: [Double]) -> Double {
+        let nonZeroValues = values.filter { $0 > 0 }
+        guard !nonZeroValues.isEmpty else { return 0 }
+        return nonZeroValues.reduce(0, +) / Double(nonZeroValues.count)
     }
 
     private func estimatedBasalEnergyKcal() -> Double {
@@ -341,7 +378,7 @@ struct HealthKitService {
 
         let calendar = Calendar.current
         let todayStart = calendar.startOfDay(for: Date())
-        guard let startDate = calendar.date(byAdding: .day, value: -6, to: todayStart),
+        guard let startDate = calendar.date(byAdding: .day, value: -364, to: todayStart),
               let endDate = calendar.date(byAdding: .day, value: 1, to: todayStart) else {
             return [:]
         }
