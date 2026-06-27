@@ -399,7 +399,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "BHealth 需要读取你的身高、体重、步数、基础消耗和活动消耗，用于在本机计算每日热量摄入与消耗。";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "BHealth 需要读取你的身高、体重、步数和活动消耗，用于在本机计算每日热量摄入与消耗。";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -445,7 +445,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "BHealth 需要读取你的身高、体重、步数、基础消耗和活动消耗，用于在本机计算每日热量摄入与消耗。";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "BHealth 需要读取你的身高、体重、步数和活动消耗，用于在本机计算每日热量摄入与消耗。";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;

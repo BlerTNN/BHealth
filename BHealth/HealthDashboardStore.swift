@@ -189,15 +189,13 @@ final class HealthDashboardStore: ObservableObject {
     private func recomputeSummaries() {
         let calendar = Calendar.current
         let todayStart = calendar.startOfDay(for: Date())
+        let basal = estimatedBasalEnergyKcal()
         var summaries: [DailyHealthOverview] = []
 
         for offset in stride(from: -364, through: 0, by: 1) {
             guard let day = calendar.date(byAdding: .day, value: offset, to: todayStart) else { continue }
             let intake = intakeKcal(on: day)
             let metrics = healthMetricsByDay[day]
-            let fallbackBasal = estimatedBasalEnergyKcal()
-            let basal = metrics?.basalEnergyKcal ?? fallbackBasal
-            let hasHealthKitBasal = (metrics?.basalEnergyKcal ?? 0) > 0
 
             summaries.append(
                 DailyHealthOverview(
@@ -206,7 +204,7 @@ final class HealthDashboardStore: ObservableObject {
                     activeEnergyKcal: metrics?.activeEnergyKcal ?? 0,
                     basalEnergyKcal: basal,
                     stepCount: metrics?.stepCount ?? 0,
-                    basalIsEstimated: !hasHealthKitBasal
+                    basalIsEstimated: true
                 )
             )
         }
@@ -277,7 +275,6 @@ struct HealthKitSnapshot {
 struct HealthDayMetrics: Hashable {
     let date: Date
     let activeEnergyKcal: Double
-    let basalEnergyKcal: Double
     let stepCount: Double
 }
 
@@ -310,7 +307,6 @@ struct HealthKitService {
         async let weightKg = latestQuantity(.bodyMass, unit: .gramUnit(with: .kilo))
         async let activeEnergy = dailyCumulativeValues(.activeEnergyBurned, unit: .kilocalorie())
         async let workoutEnergy = dailyWorkoutEnergyValues()
-        async let basalEnergy = dailyCumulativeValues(.basalEnergyBurned, unit: .kilocalorie())
         async let steps = dailyCumulativeValues(.stepCount, unit: .count())
 
         let profile = readCharacteristics()
@@ -318,13 +314,11 @@ struct HealthKitService {
         let weightValue = try await weightKg
         let activeByDay = try await activeEnergy
         let workoutByDay = try await workoutEnergy
-        let basalByDay = try await basalEnergy
         let stepsByDay = try await steps
 
         let calendar = Calendar.current
         let allDays = Set(activeByDay.keys)
             .union(workoutByDay.keys)
-            .union(basalByDay.keys)
             .union(stepsByDay.keys)
             .sorted()
 
@@ -334,7 +328,6 @@ struct HealthKitService {
             return HealthDayMetrics(
                 date: normalizedDay,
                 activeEnergyKcal: activeKcal,
-                basalEnergyKcal: basalByDay[normalizedDay] ?? 0,
                 stepCount: stepsByDay[normalizedDay] ?? 0
             )
         }
@@ -353,7 +346,6 @@ struct HealthKitService {
 
         for identifier in [
             HKQuantityTypeIdentifier.activeEnergyBurned,
-            .basalEnergyBurned,
             .stepCount,
             .height,
             .bodyMass
@@ -532,7 +524,7 @@ extension DailyHealthOverview {
             activeEnergyKcal: 0,
             basalEnergyKcal: 0,
             stepCount: 0,
-            basalIsEstimated: false
+            basalIsEstimated: true
         )
     }
 }
