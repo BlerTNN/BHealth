@@ -948,19 +948,6 @@ private struct AssistantView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        AssistantHeader(mode: mode)
-
-                        if mode.supportsMealSaving {
-                            MealLoggingContextCard(mode: mode)
-                        }
-
-                        QuickPromptRow(mode: mode) { message in
-                            isInputFocused = false
-                            Task {
-                                await viewModel.send(message, dashboardContext: healthStore.assistantContextSummary)
-                            }
-                        }
-
                         VStack(spacing: 12) {
                             ForEach(viewModel.messages) { message in
                                 ChatBubble(message: message)
@@ -1073,101 +1060,6 @@ private struct AssistantModeSelectionView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 18)
-        }
-    }
-}
-
-private struct AssistantHeader: View {
-    let mode: AssistantMode
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(AppColor.healthGreen.gradient)
-                    .frame(width: 56, height: 56)
-
-                Image(systemName: mode.icon)
-                    .font(.system(size: 24, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(mode.title)
-                    .font(.title3.weight(.bold))
-
-                Text(mode.subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineSpacing(3)
-            }
-        }
-        .healthCard()
-    }
-}
-
-private struct MealLoggingContextCard: View {
-    let mode: AssistantMode
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(dateText, systemImage: mode == .historicalFoodLog ? "calendar.badge.clock" : "calendar")
-                .font(.subheadline.weight(.semibold))
-
-            Label("餐别：由 AI 确认", systemImage: "sparkles")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-        }
-        .healthCard()
-    }
-
-    private var dateText: String {
-        mode == .historicalFoodLog ? "日期：由 AI 确认" : "日期：今天"
-    }
-}
-
-private struct QuickPromptRow: View {
-    let mode: AssistantMode
-    let sendAction: (String) -> Void
-
-    private var prompts: [QuickPrompt] {
-        switch mode {
-        case .foodLog:
-            return [
-                QuickPrompt(title: "记录一餐", icon: "fork.knife", message: "我吃了一个鸡蛋、一杯拿铁和一片吐司。"),
-                QuickPrompt(title: "估算热量", icon: "sparkles", message: "我吃了鸡胸肉沙拉，帮我估算热量。")
-            ]
-        case .historicalFoodLog:
-            return [
-                QuickPrompt(title: "补录一餐", icon: "calendar.badge.clock", message: "补录一餐：两个鸡蛋和一杯牛奶。"),
-                QuickPrompt(title: "补录昨天", icon: "clock.arrow.circlepath", message: "昨天吃了牛肉饭，大概一碗。")
-            ]
-        case .healthCoach:
-            return [
-                QuickPrompt(title: "饮食建议", icon: "leaf.fill", message: "根据我的历史记录，给我今天的饮食建议。"),
-                QuickPrompt(title: "减重趋势", icon: "chart.line.downtrend.xyaxis", message: "按最近摄入和消耗，大概能减多少体重？")
-            ]
-        }
-    }
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                ForEach(prompts) { prompt in
-                    Button {
-                        sendAction(prompt.message)
-                    } label: {
-                        Label(prompt.title, systemImage: prompt.icon)
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(AppColor.cardBackground, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.primary)
-                }
-            }
-            .padding(.vertical, 2)
         }
     }
 }
@@ -1910,13 +1802,6 @@ private struct CalorieEntry: Identifiable {
     let date: Date
     let intake: Int
     let burn: Int
-}
-
-private struct QuickPrompt: Identifiable {
-    let id = UUID()
-    let title: String
-    let icon: String
-    let message: String
 }
 
 private enum AppColor {
