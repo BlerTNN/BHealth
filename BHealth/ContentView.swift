@@ -7,6 +7,9 @@
 
 import Charts
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 struct ContentView: View {
     @State private var selectedTab = HealthTab.overview
@@ -712,9 +715,7 @@ private struct MealRecordRow: View {
     }
 
     private var recordTitle: String {
-        record.calculation.items.first?.rawText.isEmpty == false
-            ? record.calculation.items.first?.rawText ?? "饮食记录"
-            : record.calculation.items.first?.matchedFoodName ?? "饮食记录"
+        record.calculation.foodDisplayName
     }
 }
 
@@ -784,7 +785,7 @@ private struct MealRecordEditorView: View {
         self.record = record
         self.saveAction = saveAction
         self.deleteAction = deleteAction
-        _foodName = State(initialValue: record.calculation.items.first?.rawText ?? record.calculation.items.first?.matchedFoodName ?? "")
+        _foodName = State(initialValue: record.calculation.foodDisplayName)
         _kcal = State(initialValue: "\(Int(record.calculation.totalEnergyKcal.rounded()))")
         _consumedAt = State(initialValue: record.consumedAt)
         _mealType = State(initialValue: record.mealType)
@@ -792,30 +793,63 @@ private struct MealRecordEditorView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("记录") {
-                    TextField("吃的什么", text: $foodName)
-                    TextField("热量 kcal", text: $kcal)
-#if os(iOS)
-                        .keyboardType(.numberPad)
-#endif
-                    Picker("餐别", selection: $mealType) {
-                        ForEach(MealType.allCases) { type in
-                            Text(type.title).tag(type)
-                        }
-                    }
-                    DatePicker("日期", selection: $consumedAt, displayedComponents: .date)
-                }
+            ScrollView {
+                VStack(spacing: 16) {
+                    VStack(spacing: 16) {
+                        EditorTextRow(
+                            title: "食品",
+                            subtitle: "已保存的具体食物",
+                            icon: "fork.knife",
+                            tint: AppColor.healthGreen,
+                            placeholder: "例如 鸡蛋、拿铁、吐司",
+                            text: $foodName,
+                            keyboard: .text
+                        )
 
-                Section {
+                        Divider()
+
+                        EditorTextRow(
+                            title: "热量",
+                            subtitle: "当餐估算摄入",
+                            icon: "flame.fill",
+                            tint: AppColor.energyOrange,
+                            placeholder: "kcal",
+                            text: $kcal,
+                            keyboard: .number,
+                            unit: "kcal"
+                        )
+
+                        Divider()
+
+                        MealTypeEditorRow(selection: $mealType)
+
+                        Divider()
+
+                        EditorDateRow(
+                            title: "日期",
+                            subtitle: "这餐归属的日期",
+                            icon: "calendar",
+                            tint: AppColor.skyBlue,
+                            date: $consumedAt
+                        )
+                    }
+                    .healthCard()
+
                     Button(role: .destructive) {
                         deleteAction()
                         dismiss()
                     } label: {
                         Label("删除记录", systemImage: "trash")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
                     }
+                    .buttonStyle(.bordered)
                 }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 18)
             }
+            .background(AppColor.screenBackground.ignoresSafeArea())
             .navigationTitle("编辑记录")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -882,17 +916,29 @@ private struct AssistantView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
+            ZStack {
                 if let mode = viewModel.selectedMode {
                     assistantChat(mode: mode)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .trailing).combined(with: .opacity),
+                            removal: .move(edge: .leading).combined(with: .opacity)
+                        ))
                 } else {
                     AssistantModeSelectionView { mode in
-                        viewModel.openMode(mode)
+                        withAnimation(.snappy) {
+                            viewModel.openMode(mode)
+                        }
                     }
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .leading).combined(with: .opacity),
+                        removal: .move(edge: .trailing).combined(with: .opacity)
+                    ))
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(AppColor.screenBackground.ignoresSafeArea())
             .navigationTitle("AI 助手")
+            .animation(.snappy, value: viewModel.selectedMode)
             .onAppear {
                 viewModel.refreshAPIKeyStatus()
             }
@@ -907,10 +953,7 @@ private struct AssistantView: View {
                         AssistantHeader(mode: mode)
 
                         if mode.supportsMealSaving {
-                            MealLoggingContextCard(
-                                mode: mode,
-                                date: $viewModel.selectedDate
-                            )
+                            MealLoggingContextCard(mode: mode)
                         }
 
                         QuickPromptRow(mode: mode) { message in
@@ -935,6 +978,7 @@ private struct AssistantView: View {
                                 MealCalculationDraftCard(
                                     calculation: calculation,
                                     mealType: viewModel.pendingMealType,
+                                    consumedAt: viewModel.pendingConsumedAt,
                                     saveAction: viewModel.savePendingCalculation
                                 )
                                 .id(calculation.id)
@@ -987,7 +1031,9 @@ private struct AssistantView: View {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button {
                     isInputFocused = false
-                    viewModel.closeMode()
+                    withAnimation(.snappy) {
+                        viewModel.closeMode()
+                    }
                 } label: {
                     Label("返回", systemImage: "chevron.left")
                 }
@@ -1076,25 +1122,21 @@ private struct AssistantHeader: View {
 
 private struct MealLoggingContextCard: View {
     let mode: AssistantMode
-    @Binding var date: Date
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if mode == .historicalFoodLog {
-                DatePicker("记录日期", selection: $date, displayedComponents: .date)
-                    .font(.subheadline.weight(.semibold))
-                    .tint(AppColor.healthGreen)
-            } else {
-                Label("记录到今天", systemImage: "calendar")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            Label(dateText, systemImage: mode == .historicalFoodLog ? "calendar.badge.clock" : "calendar")
+                .font(.subheadline.weight(.semibold))
 
-            Label("餐别由 AI 根据对话确认", systemImage: "sparkles")
-                .font(.footnote.weight(.semibold))
+            Label("餐别：由 AI 确认", systemImage: "sparkles")
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
         }
         .healthCard()
+    }
+
+    private var dateText: String {
+        mode == .historicalFoodLog ? "日期：由 AI 确认" : "日期：今天"
     }
 }
 
@@ -1111,8 +1153,8 @@ private struct QuickPromptRow: View {
             ]
         case .historicalFoodLog:
             return [
-                QuickPrompt(title: "补录一餐", icon: "calendar.badge.clock", message: "补录这一天：两个鸡蛋和一杯牛奶。"),
-                QuickPrompt(title: "补录热量", icon: "clock.arrow.circlepath", message: "这一天吃了牛肉饭，大概一碗。")
+                QuickPrompt(title: "补录一餐", icon: "calendar.badge.clock", message: "补录一餐：两个鸡蛋和一杯牛奶。"),
+                QuickPrompt(title: "补录昨天", icon: "clock.arrow.circlepath", message: "昨天吃了牛肉饭，大概一碗。")
             ]
         case .healthCoach:
             return [
@@ -1271,6 +1313,7 @@ private struct LoadingBubble: View {
 private struct MealCalculationDraftCard: View {
     let calculation: MealCalculationResult
     let mealType: MealType?
+    let consumedAt: Date?
     let saveAction: () -> Void
 
     var body: some View {
@@ -1304,11 +1347,17 @@ private struct MealCalculationDraftCard: View {
                     .padding(.leading, 4)
             }
 
-            if let mealType {
-                Label("餐别：\(mealType.title)", systemImage: "sparkles")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                if let consumedAt {
+                    Label("日期：\(consumedAt.formatted(date: .abbreviated, time: .omitted))", systemImage: "calendar")
+                }
+
+                if let mealType {
+                    Label("餐别：\(mealType.title)", systemImage: "sparkles")
+                }
             }
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(calculation.items.prefix(3)) { item in
@@ -1318,7 +1367,7 @@ private struct MealCalculationDraftCard: View {
                             .foregroundStyle(AppColor.healthGreen)
                             .padding(.top, 7)
 
-                        Text("\(item.rawText)：\(item.matchedFoodName)，约 \(Int(item.energyKcal.rounded())) kcal")
+                        Text("\(item.displayFoodName)：约 \(Int(item.energyKcal.rounded())) kcal")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
@@ -1615,20 +1664,81 @@ private struct ProfileEditorView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("个人信息") {
-                    TextField("姓名", text: $name)
-                    TextField("身高 cm", text: $height)
-                    TextField("体重 kg", text: $weight)
-                    TextField("年龄", text: $age)
-                    TextField("目标体重 kg", text: $targetWeight)
-                    Picker("生理性别", selection: $biologicalSex) {
-                        Text("未指定").tag("unspecified")
-                        Text("男").tag("male")
-                        Text("女").tag("female")
+            ScrollView {
+                VStack(spacing: 16) {
+                    VStack(spacing: 16) {
+                        EditorTextRow(
+                            title: "姓名",
+                            subtitle: "个人资料显示名称",
+                            icon: "person.fill",
+                            tint: AppColor.healthGreen,
+                            placeholder: "姓名",
+                            text: $name,
+                            keyboard: .text
+                        )
+
+                        Divider()
+
+                        EditorTextRow(
+                            title: "身高",
+                            subtitle: "用于估算基础代谢",
+                            icon: "ruler",
+                            tint: AppColor.skyBlue,
+                            placeholder: "cm",
+                            text: $height,
+                            keyboard: .decimal,
+                            unit: "cm"
+                        )
+
+                        Divider()
+
+                        EditorTextRow(
+                            title: "体重",
+                            subtitle: "当前体重",
+                            icon: "scalemass.fill",
+                            tint: AppColor.healthGreen,
+                            placeholder: "kg",
+                            text: $weight,
+                            keyboard: .decimal,
+                            unit: "kg"
+                        )
+
+                        Divider()
+
+                        EditorTextRow(
+                            title: "年龄",
+                            subtitle: "用于健康估算",
+                            icon: "calendar",
+                            tint: AppColor.energyOrange,
+                            placeholder: "岁",
+                            text: $age,
+                            keyboard: .number,
+                            unit: "岁"
+                        )
+
+                        Divider()
+
+                        EditorTextRow(
+                            title: "目标体重",
+                            subtitle: "长期目标",
+                            icon: "target",
+                            tint: AppColor.violet,
+                            placeholder: "kg",
+                            text: $targetWeight,
+                            keyboard: .decimal,
+                            unit: "kg"
+                        )
+
+                        Divider()
+
+                        BiologicalSexEditorRow(selection: $biologicalSex)
                     }
+                    .healthCard()
                 }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 18)
             }
+            .background(AppColor.screenBackground.ignoresSafeArea())
             .navigationTitle("编辑资料")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1663,6 +1773,149 @@ private struct ProfileEditorView: View {
             return "\(Int(value))"
         }
         return String(format: "%.1f", value)
+    }
+}
+
+private enum EditorKeyboardKind {
+    case text
+    case number
+    case decimal
+
+#if os(iOS)
+    var keyboardType: UIKeyboardType {
+        switch self {
+        case .text:
+            return .default
+        case .number:
+            return .numberPad
+        case .decimal:
+            return .decimalPad
+        }
+    }
+#endif
+}
+
+private struct EditorTextRow: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let tint: Color
+    let placeholder: String
+    @Binding var text: String
+    let keyboard: EditorKeyboardKind
+    var unit: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            EditorFieldHeader(title: title, subtitle: subtitle, icon: icon, tint: tint)
+
+            HStack(spacing: 8) {
+                TextField(placeholder, text: $text)
+                    .font(.headline.weight(.semibold))
+                    .monospacedDigit()
+#if os(iOS)
+                    .keyboardType(keyboard.keyboardType)
+#endif
+
+                if let unit {
+                    Text(unit)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(AppColor.softFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+}
+
+private struct EditorDateRow: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let tint: Color
+    @Binding var date: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            EditorFieldHeader(title: title, subtitle: subtitle, icon: icon, tint: tint)
+
+            DatePicker("", selection: $date, displayedComponents: .date)
+                .labelsHidden()
+                .tint(AppColor.healthGreen)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(AppColor.softFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+}
+
+private struct MealTypeEditorRow: View {
+    @Binding var selection: MealType
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            EditorFieldHeader(title: "餐别", subtitle: "这餐属于哪个时段", icon: "sparkles", tint: AppColor.violet)
+
+            Picker("餐别", selection: $selection) {
+                ForEach(MealType.allCases) { type in
+                    Text(type.title).tag(type)
+                }
+            }
+            .pickerStyle(.menu)
+            .tint(AppColor.healthGreen)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(AppColor.softFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+}
+
+private struct BiologicalSexEditorRow: View {
+    @Binding var selection: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            EditorFieldHeader(title: "生理性别", subtitle: "用于基础代谢估算", icon: "figure.stand", tint: AppColor.violet)
+
+            Picker("生理性别", selection: $selection) {
+                Text("未指定").tag("unspecified")
+                Text("男").tag("male")
+                Text("女").tag("female")
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+}
+
+private struct EditorFieldHeader: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 34, height: 34)
+                .background(tint.opacity(0.14), in: Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+        }
     }
 }
 

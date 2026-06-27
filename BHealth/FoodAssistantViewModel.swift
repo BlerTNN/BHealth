@@ -73,9 +73,9 @@ enum AssistantMode: String, CaseIterable, Identifiable, Hashable {
     var welcomeMessage: String {
         switch self {
         case .foodLog:
-            return "告诉我今天吃了什么，我会帮你估算热量。你也可以先选餐别，比如早餐、午餐、晚餐、加餐。"
+            return "告诉我今天吃了什么，我会帮你估算热量。如果餐别或份量还不清楚，我会继续问。"
         case .historicalFoodLog:
-            return "选择要补录的日期和餐别，再告诉我那一餐吃了什么。我会保存到对应日期。"
+            return "告诉我要补录哪一天、吃了什么。我会确认日期、餐别和热量后再保存。"
         case .healthCoach:
             return "你可以问我饮食建议、热量缺口、近期趋势或大概减重速度。我会结合本地历史记录做判断。"
         }
@@ -90,8 +90,8 @@ final class FoodAssistantViewModel: ObservableObject {
     @Published var hasAPIKey: Bool
     @Published var pendingCalculation: MealCalculationResult?
     @Published var pendingMealType: MealType?
+    @Published var pendingConsumedAt: Date?
     @Published var selectedMode: AssistantMode?
-    @Published var selectedDate = Date()
     @Published private(set) var savedRecords: [SavedMealRecord]
 
     private let apiKeyStore: KeychainAPIKeyStore
@@ -121,7 +121,7 @@ final class FoodAssistantViewModel: ObservableObject {
         selectedMode = mode
         pendingCalculation = nil
         pendingMealType = nil
-        selectedDate = mode == .foodLog ? Date() : selectedDate
+        pendingConsumedAt = nil
         messages = [
             AssistantMessage(text: mode.welcomeMessage, isFromUser: false)
         ]
@@ -131,6 +131,7 @@ final class FoodAssistantViewModel: ObservableObject {
         selectedMode = nil
         pendingCalculation = nil
         pendingMealType = nil
+        pendingConsumedAt = nil
         draftMessage = ""
         messages = AssistantMessage.sample
     }
@@ -152,19 +153,24 @@ final class FoodAssistantViewModel: ObservableObject {
         defer { isSending = false }
 
         let mode = selectedMode ?? .healthCoach
+        let referenceDate = Date()
         let calculation = mode.supportsMealSaving ? calculator.calculate(from: text) : nil
         let detectedMealType = mode.supportsMealSaving ? MealType.detected(in: text) : nil
+        let detectedConsumedAt = consumedAtCandidate(for: mode, text: text, referenceDate: referenceDate)
 
         guard hasAPIKey else {
             let reply = localFallbackReply(
                 for: text,
                 calculation: calculation,
                 mealType: detectedMealType,
+                consumedAt: detectedConsumedAt,
+                mode: mode,
                 reason: "还没有保存 DeepSeek API key。"
             )
             messages.append(AssistantMessage(text: reply, isFromUser: false))
             pendingMealType = detectedMealType
-            pendingCalculation = mode.supportsMealSaving && detectedMealType != nil ? calculation : nil
+            pendingConsumedAt = detectedConsumedAt
+            pendingCalculation = mode.supportsMealSaving && detectedMealType != nil && detectedConsumedAt != nil ? calculation : nil
             return
         }
 
@@ -175,14 +181,17 @@ final class FoodAssistantViewModel: ObservableObject {
                 calculation: calculation,
                 mode: mode,
                 mealType: detectedMealType,
-                consumedAt: selectedDate,
+                consumedAt: detectedConsumedAt,
+                currentDate: referenceDate,
                 dashboardContext: dashboardContext
             )
 
             messages.append(AssistantMessage(text: aiReply.reply, isFromUser: false))
             let resolvedMealType = aiReply.mealType ?? detectedMealType
-            if mode.supportsMealSaving, aiReply.shouldOfferSave, let resolvedMealType {
+            let resolvedConsumedAt = consumedAtCandidate(for: mode, aiReply: aiReply, detectedDate: detectedConsumedAt, referenceDate: referenceDate)
+            if mode.supportsMealSaving, aiReply.shouldOfferSave, let resolvedMealType, let resolvedConsumedAt {
                 pendingMealType = resolvedMealType
+                pendingConsumedAt = resolvedConsumedAt
                 pendingCalculation = aiReply.estimatedCalculation(for: text) ?? calculation
             }
         } catch {
@@ -190,20 +199,23 @@ final class FoodAssistantViewModel: ObservableObject {
                 for: text,
                 calculation: calculation,
                 mealType: detectedMealType,
+                consumedAt: detectedConsumedAt,
+                mode: mode,
                 reason: error.localizedDescription
             )
             messages.append(AssistantMessage(text: reply, isFromUser: false))
             pendingMealType = detectedMealType
-            pendingCalculation = mode.supportsMealSaving && detectedMealType != nil ? calculation : nil
+            pendingConsumedAt = detectedConsumedAt
+            pendingCalculation = mode.supportsMealSaving && detectedMealType != nil && detectedConsumedAt != nil ? calculation : nil
         }
     }
 
     func savePendingCalculation() {
-        guard let pendingCalculation, let pendingMealType else { return }
+        guard let pendingCalculation, let pendingMealType, let pendingConsumedAt else { return }
 
         let record = SavedMealRecord(
             confirmedAt: Date(),
-            consumedAt: selectedDate,
+            consumedAt: pendingConsumedAt,
             mealType: pendingMealType,
             calculation: pendingCalculation
         )
@@ -212,18 +224,32 @@ final class FoodAssistantViewModel: ObservableObject {
         savedRecords = recordStore.load()
         self.pendingCalculation = nil
         self.pendingMealType = nil
+        self.pendingConsumedAt = nil
 
         let kcal = Int(record.calculation.totalEnergyKcal.rounded())
-        messages.append(AssistantMessage(text: "已保存到本地记录：\(record.consumedAt.formatted(date: .abbreviated, time: .omitted)) \(record.mealType.title)，约 \(kcal) kcal。", isFromUser: false))
+        messages.append(AssistantMessage(text: "已保存到本地记录：\(record.consumedAt.formatted(date: .abbreviated, time: .omitted)) \(record.mealType.title) \(record.calculation.foodDisplayName)，约 \(kcal) kcal。", isFromUser: false))
     }
 
     private func localFallbackReply(
         for text: String,
         calculation: MealCalculationResult?,
         mealType: MealType?,
+        consumedAt: Date?,
+        mode: AssistantMode,
         reason: String
     ) -> String {
         if let calculation {
+            if mode == .historicalFoodLog, consumedAt == nil {
+                return """
+                我先用本地 USDA Foundation Foods 做了粗略计算，但 AI 回复暂时不可用：\(reason)
+
+                估计摄入：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
+                合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+
+                这条历史记录是哪一天？你可以说“昨天”“前天”或具体日期。
+                """
+            }
+
             guard let mealType else {
                 return """
                 我先用本地 USDA Foundation Foods 做了粗略计算，但 AI 回复暂时不可用：\(reason)
@@ -241,8 +267,10 @@ final class FoodAssistantViewModel: ObservableObject {
             估计摄入：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
             合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
             可信度：\(calculation.confidence == "low" ? "较低" : "中等")
+            日期：\(consumedAt?.formatted(date: .abbreviated, time: .omitted) ?? "今天")
             餐别：\(mealType.title)
 
+            食品：\(calculation.foodDisplayName)
             主要依据：\(calculation.items.map { $0.matchedFoodName }.joined(separator: "；"))
             是否确认保存这次饮食记录？
             """
@@ -253,6 +281,33 @@ final class FoodAssistantViewModel: ObservableObject {
 
         你可以先补充更明确的信息，例如食物名称、数量或克重。比如：“鸡蛋 1 个，牛奶 250g”。
         """
+    }
+
+    private func consumedAtCandidate(for mode: AssistantMode, text: String, referenceDate: Date) -> Date? {
+        switch mode {
+        case .foodLog:
+            return Calendar.current.startOfDay(for: referenceDate)
+        case .historicalFoodLog:
+            return MealDateResolver.detectedDate(in: text, referenceDate: referenceDate)
+        case .healthCoach:
+            return nil
+        }
+    }
+
+    private func consumedAtCandidate(
+        for mode: AssistantMode,
+        aiReply: AssistantAIReply,
+        detectedDate: Date?,
+        referenceDate: Date
+    ) -> Date? {
+        switch mode {
+        case .foodLog:
+            return Calendar.current.startOfDay(for: referenceDate)
+        case .historicalFoodLog:
+            return aiReply.consumedAt(referenceDate: referenceDate) ?? detectedDate
+        case .healthCoach:
+            return nil
+        }
     }
 }
 
@@ -269,13 +324,15 @@ struct FoodAssistantEngine {
         calculation: MealCalculationResult?,
         mode: AssistantMode,
         mealType: MealType?,
-        consumedAt: Date,
+        consumedAt: Date?,
+        currentDate: Date,
         dashboardContext: String
     ) async throws -> AssistantAIReply {
         let context = PromptContext(
             userText: userText,
             mode: mode.title,
             mealType: mealType?.title,
+            currentDate: currentDate,
             consumedAt: consumedAt,
             dashboardContext: dashboardContext,
             calculation: calculation
@@ -297,8 +354,10 @@ struct FoodAssistantEngine {
         6. 只有用户明确确认后才能保存记录。你现在只能建议用户确认，不能声称已经保存。
         7. 不要输出伪精确热量，优先使用整数和范围。
         8. 记录饮食/历史数据添加模式必须确认餐别；如果用户没有说明早餐、午餐、晚餐、下午茶、加餐/零食或夜宵，先追问餐别，不要要求保存。
-        9. 如果模式是“健康助手”，提供通用建议、趋势判断、粗略减重估计，不要要求保存饮食记录，should_offer_save 必须为 false。
-        10. 输出严格 JSON，不要 Markdown，不要代码块。
+        9. 历史数据添加模式必须确认日期；如果日期不明确，先追问日期，不要要求保存。相对日期要基于 current_date 转成 YYYY-MM-DD。
+        10. food_items 只写具体食品或饮品名称，不要写整句聊天、请求语气或“帮我估算”。
+        11. 如果模式是“健康助手”，提供通用建议、趋势判断、粗略减重估计，不要要求保存饮食记录，should_offer_save 必须为 false。
+        12. 输出严格 JSON，不要 Markdown，不要代码块。
 
         JSON schema:
         {
@@ -310,6 +369,8 @@ struct FoodAssistantEngine {
           "energy_low_kcal": 370,
           "energy_high_kcal": 500,
           "meal_type": "breakfast|lunch|dinner|afternoon_tea|snack|late_night|other|null",
+          "consumed_at": "YYYY-MM-DD|null",
+          "food_items": ["鸡蛋", "拿铁", "吐司"],
           "assumptions": ["用于保存快照的关键假设"],
           "source_summary": "USDA Foundation Foods 2026-04-30 + AI 推理估算"
         }
@@ -323,11 +384,14 @@ struct FoodAssistantEngine {
         模式是：\(mode.title)。
         如果是记录饮食或历史数据添加：
         - 如果用户没有明确餐别，先追问“这是哪一餐？”，meal_type=null，should_offer_save=false。
-        - 如果已经明确餐别，把 meal_type 和 consumed_at 纳入回复。meal_type 只能使用 breakfast/lunch/dinner/afternoon_tea/snack/late_night/other。
+        - 如果是历史数据添加且用户没有明确日期，先追问“这条记录是哪一天？”，consumed_at=null，should_offer_save=false。
+        - 如果已经明确餐别，把 meal_type 和 consumed_at 纳入回复。meal_type 只能使用 breakfast/lunch/dinner/afternoon_tea/snack/late_night/other，consumed_at 只能使用 YYYY-MM-DD 或 null。
+        - 如果是记录饮食，consumed_at 使用 current_date 的日期。
         - 如果有 calculation，把它作为参考证据，结合用户描述判断是否需要修正或补充。
         - 如果没有 calculation，但用户描述足够可估算，可以给低可信度区间估算，并填写 estimated_energy_kcal / energy_low_kcal / energy_high_kcal。
         - 信息不足时追问食物、份量、克重、品牌/地区或配料中最关键的 1-2 项。
-        - 只有食物信息和餐别都明确时，才可以询问“是否确认保存”，并把 should_offer_save 设为 true。
+        - food_items 中只放食品名称，例如 ["鸡蛋", "牛奶"]，不要放“我吃了”“补录昨天”等对话文本。
+        - 只有食物信息、餐别和必要日期都明确时，才可以询问“是否确认保存”，并把 should_offer_save 设为 true。
         如果是健康助手：
         - 使用 dashboard_context 总结用户近况。
         - 可以估算热量缺口对应的大概体重变化，但必须说明只是粗略推断。
@@ -352,11 +416,17 @@ struct AssistantAIReply: Codable, Hashable {
     let energyLowKcal: Double?
     let energyHighKcal: Double?
     let mealTypeRaw: String?
+    let consumedAtRaw: String?
+    let foodItems: [String]?
     let assumptions: [String]?
     let sourceSummary: String?
 
     var mealType: MealType? {
         MealType.fromAssistantValue(mealTypeRaw)
+    }
+
+    func consumedAt(referenceDate: Date) -> Date? {
+        MealDateResolver.assistantDate(from: consumedAtRaw, referenceDate: referenceDate)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -368,6 +438,8 @@ struct AssistantAIReply: Codable, Hashable {
         case energyLowKcal = "energy_low_kcal"
         case energyHighKcal = "energy_high_kcal"
         case mealTypeRaw = "meal_type"
+        case consumedAtRaw = "consumed_at"
+        case foodItems = "food_items"
         case assumptions
         case sourceSummary = "source_summary"
     }
@@ -392,10 +464,11 @@ struct AssistantAIReply: Codable, Hashable {
         let high = energyHighKcal ?? estimatedEnergyKcal * 1.25
         let source = sourceSummary ?? "AI 推理估算"
         let snapshotAssumptions = assumptions?.isEmpty == false ? assumptions ?? [] : ["食品库未完全覆盖该描述，使用 AI 常识做粗略区间估算。"]
+        let foodName = MealFoodNameFormatter.displayName(from: foodItems, fallback: userText)
 
         let item = MealItemCalculation(
-            rawText: userText,
-            matchedFoodName: "AI 推理估算",
+            rawText: foodName,
+            matchedFoodName: foodName,
             fdcId: -1,
             estimatedGrams: 0,
             energyKcal: estimatedEnergyKcal,
@@ -425,6 +498,115 @@ enum AssistantAIReplyError: LocalizedError {
 
     var errorDescription: String? {
         "AI 回复无法解析。"
+    }
+}
+
+enum MealDateResolver {
+    static func detectedDate(in text: String, referenceDate: Date) -> Date? {
+        let normalized = text
+            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: .current)
+            .lowercased()
+
+        let relativeRules: [(String, Int)] = [
+            ("大前天", -3),
+            ("前天", -2),
+            ("昨天", -1),
+            ("昨日", -1),
+            ("昨晚", -1),
+            ("今天", 0),
+            ("今日", 0)
+        ]
+
+        if let offset = relativeRules.first(where: { normalized.contains($0.0) })?.1 {
+            return Calendar.current.date(byAdding: .day, value: offset, to: Calendar.current.startOfDay(for: referenceDate))
+        }
+
+        if let date = dateFromMatchedPattern(#"\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2}"#, in: normalized, referenceDate: referenceDate, includesYear: true) {
+            return date
+        }
+
+        if let date = dateFromMatchedPattern(#"\d{4}年\d{1,2}月\d{1,2}[日号]?"#, in: normalized, referenceDate: referenceDate, includesYear: true) {
+            return date
+        }
+
+        if let date = dateFromMatchedPattern(#"\d{1,2}[-/\.]\d{1,2}"#, in: normalized, referenceDate: referenceDate, includesYear: false) {
+            return date
+        }
+
+        if let date = dateFromMatchedPattern(#"\d{1,2}月\d{1,2}[日号]?"#, in: normalized, referenceDate: referenceDate, includesYear: false) {
+            return date
+        }
+
+        return nil
+    }
+
+    static func assistantDate(from value: String?, referenceDate: Date) -> Date? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.lowercased() != "null" else { return nil }
+
+        if let dayPrefix = trimmed.split(separator: "T").first,
+           let date = dateFromDayString(String(dayPrefix), referenceDate: referenceDate) {
+            return date
+        }
+
+        return detectedDate(in: trimmed, referenceDate: referenceDate)
+    }
+
+    private static func dateFromMatchedPattern(
+        _ pattern: String,
+        in text: String,
+        referenceDate: Date,
+        includesYear: Bool
+    ) -> Date? {
+        guard let range = text.range(of: pattern, options: .regularExpression) else { return nil }
+        return dateFromNumbers(in: String(text[range]), referenceDate: referenceDate, includesYear: includesYear)
+    }
+
+    private static func dateFromDayString(_ value: String, referenceDate: Date) -> Date? {
+        dateFromNumbers(in: value, referenceDate: referenceDate, includesYear: value.prefix(4).allSatisfy(\.isNumber))
+    }
+
+    private static func dateFromNumbers(in text: String, referenceDate: Date, includesYear: Bool) -> Date? {
+        let values = text
+            .split { !$0.isNumber }
+            .compactMap { Int($0) }
+
+        let calendar = Calendar.current
+        let referenceYear = calendar.component(.year, from: referenceDate)
+        let year: Int
+        let month: Int
+        let day: Int
+
+        if includesYear {
+            guard values.count >= 3 else { return nil }
+            year = values[0]
+            month = values[1]
+            day = values[2]
+        } else {
+            guard values.count >= 2 else { return nil }
+            year = referenceYear
+            month = values[0]
+            day = values[1]
+        }
+
+        var components = DateComponents()
+        components.calendar = calendar
+        components.year = year
+        components.month = month
+        components.day = day
+
+        guard let date = calendar.date(from: components) else { return nil }
+        let normalized = calendar.dateComponents([.year, .month, .day], from: date)
+        guard normalized.year == year, normalized.month == month, normalized.day == day else { return nil }
+
+        let startOfDay = calendar.startOfDay(for: date)
+        if !includesYear, startOfDay > calendar.startOfDay(for: referenceDate),
+           let previousYear = calendar.date(byAdding: .year, value: -1, to: startOfDay) {
+            return previousYear
+        }
+
+        return startOfDay
     }
 }
 
@@ -472,7 +654,8 @@ private struct PromptContext: Codable {
     let userText: String
     let mode: String
     let mealType: String?
-    let consumedAt: Date
+    let currentDate: Date
+    let consumedAt: Date?
     let dashboardContext: String
     let calculation: MealCalculationResult?
 }

@@ -158,7 +158,7 @@ final class HealthDashboardStore: ObservableObject {
         let recentRecords = savedMealRecords
             .prefix(8)
             .map { record in
-                "\(record.consumedAt.formatted(date: .numeric, time: .omitted)) \(record.mealType.title) \(Int(record.calculation.totalEnergyKcal.rounded()))kcal"
+                "\(record.consumedAt.formatted(date: .numeric, time: .omitted)) \(record.mealType.title) \(record.calculation.foodDisplayName) \(Int(record.calculation.totalEnergyKcal.rounded()))kcal"
             }
             .joined(separator: "；")
 

@@ -141,6 +141,95 @@ struct MealCalculationResult: Codable, Hashable, Identifiable {
     }
 }
 
+enum MealFoodNameFormatter {
+    nonisolated static func displayName(from items: [MealItemCalculation]) -> String {
+        let names = items
+            .map(\.displayFoodName)
+            .filter { !$0.isEmpty && $0 != "饮食记录" }
+
+        return joined(names, fallback: "饮食记录")
+    }
+
+    nonisolated static func displayName(from foodItems: [String]?, fallback: String) -> String {
+        let names = (foodItems ?? [])
+            .map(cleaned)
+            .filter { !$0.isEmpty }
+
+        if !names.isEmpty {
+            return joined(names, fallback: cleaned(fallback))
+        }
+
+        let cleanedFallback = cleaned(fallback)
+        return cleanedFallback.isEmpty ? "饮食记录" : cleanedFallback
+    }
+
+    nonisolated static func cleaned(_ value: String) -> String {
+        var text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return "" }
+
+        if let separatorRange = text.range(of: "：") ?? text.range(of: ":") {
+            let head = String(text[..<separatorRange.lowerBound])
+            if head.contains("补录") || head.contains("记录") || head.contains("这一天") || head.contains("今天") || head.contains("昨天") || head.contains("前天") {
+                text = String(text[separatorRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        let prefixes = [
+            "我早餐吃了", "我午餐吃了", "我晚餐吃了", "我早饭吃了", "我午饭吃了", "我晚饭吃了",
+            "早餐吃了", "午餐吃了", "晚餐吃了", "早饭吃了", "午饭吃了", "晚饭吃了",
+            "今天吃了", "昨天吃了", "前天吃了", "这一天吃了", "补录这一天", "补录昨天", "补录前天",
+            "我吃了", "吃了", "补录", "记录"
+        ]
+        for prefix in prefixes where text.hasPrefix(prefix) {
+            text.removeFirst(prefix.count)
+            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            break
+        }
+
+        let suffixes = [
+            "帮我估算一下热量", "帮我估算热量", "帮我算一下热量", "帮我算热量",
+            "大概多少热量", "大概多少卡路里", "大概多少卡", "估算热量", "算热量",
+            "多少热量", "多少卡路里", "多少卡", "是否确认保存"
+        ]
+        for suffix in suffixes where text.hasSuffix(suffix) {
+            text.removeLast(suffix.count)
+            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            break
+        }
+
+        text = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+        return text
+    }
+
+    nonisolated private static func joined(_ names: [String], fallback: String) -> String {
+        guard !names.isEmpty else { return fallback.isEmpty ? "饮食记录" : fallback }
+        let visibleNames = Array(names.prefix(3))
+        return visibleNames.joined(separator: "、") + (names.count > visibleNames.count ? "等" : "")
+    }
+}
+
+extension MealItemCalculation {
+    nonisolated var displayFoodName: String {
+        let cleanedRawText = MealFoodNameFormatter.cleaned(rawText)
+        if !cleanedRawText.isEmpty {
+            return cleanedRawText
+        }
+
+        let cleanedMatch = MealFoodNameFormatter.cleaned(matchedFoodName)
+        if !cleanedMatch.isEmpty && cleanedMatch != "AI 推理估算" {
+            return cleanedMatch
+        }
+
+        return "饮食记录"
+    }
+}
+
+extension MealCalculationResult {
+    nonisolated var foodDisplayName: String {
+        MealFoodNameFormatter.displayName(from: items)
+    }
+}
+
 enum MealType: String, Codable, CaseIterable, Identifiable, Hashable {
     case breakfast
     case lunch
@@ -349,13 +438,7 @@ struct FoodMentionExtractor {
     }
 
     private static func cleaned(_ value: String) -> String {
-        var text = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prefixes = ["我早餐吃了", "我午餐吃了", "我晚餐吃了", "早餐吃了", "午餐吃了", "晚餐吃了", "我吃了", "吃了"]
-        for prefix in prefixes where text.hasPrefix(prefix) {
-            text.removeFirst(prefix.count)
-            break
-        }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        MealFoodNameFormatter.cleaned(value)
     }
 }
 
