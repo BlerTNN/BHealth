@@ -912,33 +912,31 @@ private struct MealRecordEditorView: View {
 private struct AssistantView: View {
     @EnvironmentObject private var healthStore: HealthDashboardStore
     @StateObject private var viewModel = FoodAssistantViewModel()
+    @State private var navigationPath: [AssistantMode] = []
     @FocusState private var isInputFocused: Bool
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                if let mode = viewModel.selectedMode {
-                    assistantChat(mode: mode)
-                        .transition(.asymmetric(
-                            insertion: .move(edge: .trailing).combined(with: .opacity),
-                            removal: .move(edge: .leading).combined(with: .opacity)
-                        ))
-                } else {
-                    AssistantModeSelectionView { mode in
-                        withAnimation(.snappy) {
+        NavigationStack(path: $navigationPath) {
+            AssistantModeSelectionView { mode in
+                viewModel.openMode(mode)
+                navigationPath.append(mode)
+            }
+            .background(AppColor.screenBackground.ignoresSafeArea())
+            .navigationTitle("AI 助手")
+            .navigationDestination(for: AssistantMode.self) { mode in
+                assistantChat(mode: mode)
+                    .onAppear {
+                        if viewModel.selectedMode != mode {
                             viewModel.openMode(mode)
                         }
                     }
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .leading).combined(with: .opacity),
-                        removal: .move(edge: .trailing).combined(with: .opacity)
-                    ))
+            }
+            .onChange(of: navigationPath) { _, path in
+                if path.isEmpty {
+                    isInputFocused = false
+                    viewModel.closeMode()
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(AppColor.screenBackground.ignoresSafeArea())
-            .navigationTitle("AI 助手")
-            .animation(.snappy, value: viewModel.selectedMode)
             .onAppear {
                 viewModel.refreshAPIKeyStatus()
             }
@@ -1027,18 +1025,6 @@ private struct AssistantView: View {
             .background(.regularMaterial)
         }
         .navigationTitle(mode.title)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button {
-                    isInputFocused = false
-                    withAnimation(.snappy) {
-                        viewModel.closeMode()
-                    }
-                } label: {
-                    Label("返回", systemImage: "chevron.left")
-                }
-            }
-        }
     }
 }
 
