@@ -97,17 +97,21 @@ final class FoodAssistantViewModel: ObservableObject {
     private let apiKeyStore: KeychainAPIKeyStore
     private let engine: FoodAssistantEngine
     private let calculator: MealNutritionCalculator
+    private let probabilisticCoordinator: FoodConversationCoordinator
     private let recordStore: MealRecordLocalStore
+    private var probabilisticSession = FoodConversationSession()
 
     init() {
         let apiKeyStore = KeychainAPIKeyStore.shared
         let engine = FoodAssistantEngine()
         let calculator = MealNutritionCalculator()
+        let probabilisticCoordinator = FoodConversationCoordinator()
         let recordStore = MealRecordLocalStore()
 
         self.apiKeyStore = apiKeyStore
         self.engine = engine
         self.calculator = calculator
+        self.probabilisticCoordinator = probabilisticCoordinator
         self.recordStore = recordStore
         self.hasAPIKey = apiKeyStore.hasAPIKey
         self.savedRecords = recordStore.load()
@@ -122,6 +126,7 @@ final class FoodAssistantViewModel: ObservableObject {
         pendingCalculation = nil
         pendingMealType = nil
         pendingConsumedAt = nil
+        probabilisticSession = FoodConversationSession()
         messages = [
             AssistantMessage(text: mode.welcomeMessage, isFromUser: false)
         ]
@@ -133,6 +138,7 @@ final class FoodAssistantViewModel: ObservableObject {
         pendingMealType = nil
         pendingConsumedAt = nil
         draftMessage = ""
+        probabilisticSession = FoodConversationSession()
         messages = AssistantMessage.sample
     }
 
@@ -150,10 +156,31 @@ final class FoodAssistantViewModel: ObservableObject {
         isSending = true
         pendingCalculation = nil
         pendingMealType = nil
+        pendingConsumedAt = nil
         defer { isSending = false }
 
         let mode = selectedMode ?? .healthCoach
         let referenceDate = Date()
+
+        if mode.supportsMealSaving, FeatureFlags.probabilisticFoodEstimation {
+            let result = probabilisticCoordinator.handle(
+                userText: text,
+                mode: mode,
+                session: &probabilisticSession,
+                referenceDate: referenceDate
+            )
+            messages.append(AssistantMessage(text: result.reply, isFromUser: false))
+            if result.shouldOfferSave,
+               let calculation = result.calculation,
+               let mealType = result.mealType,
+               let consumedAt = result.consumedAt {
+                pendingMealType = mealType
+                pendingConsumedAt = consumedAt
+                pendingCalculation = calculation
+            }
+            return
+        }
+
         let calculation = mode.supportsMealSaving ? calculator.calculate(from: text) : nil
         let detectedMealType = mode.supportsMealSaving ? MealType.detected(in: text) : nil
         let detectedConsumedAt = consumedAtCandidate(for: mode, text: text, referenceDate: referenceDate)

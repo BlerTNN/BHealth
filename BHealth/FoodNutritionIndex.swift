@@ -230,7 +230,7 @@ extension MealCalculationResult {
     }
 }
 
-enum MealType: String, Codable, CaseIterable, Identifiable, Hashable {
+enum MealType: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
     case breakfast
     case lunch
     case dinner

@@ -1219,7 +1219,7 @@ private struct MealCalculationDraftCard: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
 
-                Text("范围 \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded()))")
+                Text("较可能范围 \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded()))")
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(.secondary)
                     .padding(.leading, 4)
@@ -1256,6 +1256,21 @@ private struct MealCalculationDraftCard: View {
             Text("来源：\(calculation.sourceSummary)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            if !calculation.assumptions.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("主要假设")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    ForEach(Array(calculation.assumptions.prefix(3)), id: \.self) { assumption in
+                        Label(assumption, systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+            }
 
             Button(action: saveAction) {
                 Label("确认记录", systemImage: "checkmark.circle.fill")
