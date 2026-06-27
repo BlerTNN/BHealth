@@ -89,8 +89,8 @@ final class FoodAssistantViewModel: ObservableObject {
     @Published var isSending = false
     @Published var hasAPIKey: Bool
     @Published var pendingCalculation: MealCalculationResult?
+    @Published var pendingMealType: MealType?
     @Published var selectedMode: AssistantMode?
-    @Published var selectedMealType: MealType = .lunch
     @Published var selectedDate = Date()
     @Published private(set) var savedRecords: [SavedMealRecord]
 
@@ -120,6 +120,7 @@ final class FoodAssistantViewModel: ObservableObject {
     func openMode(_ mode: AssistantMode) {
         selectedMode = mode
         pendingCalculation = nil
+        pendingMealType = nil
         selectedDate = mode == .foodLog ? Date() : selectedDate
         messages = [
             AssistantMessage(text: mode.welcomeMessage, isFromUser: false)
@@ -129,6 +130,7 @@ final class FoodAssistantViewModel: ObservableObject {
     func closeMode() {
         selectedMode = nil
         pendingCalculation = nil
+        pendingMealType = nil
         draftMessage = ""
         messages = AssistantMessage.sample
     }
@@ -146,15 +148,23 @@ final class FoodAssistantViewModel: ObservableObject {
         messages.append(AssistantMessage(text: text, isFromUser: true))
         isSending = true
         pendingCalculation = nil
+        pendingMealType = nil
         defer { isSending = false }
 
         let mode = selectedMode ?? .healthCoach
         let calculation = mode.supportsMealSaving ? calculator.calculate(from: text) : nil
+        let detectedMealType = mode.supportsMealSaving ? MealType.detected(in: text) : nil
 
         guard hasAPIKey else {
-            let reply = localFallbackReply(for: text, calculation: calculation, reason: "还没有保存 DeepSeek API key。")
+            let reply = localFallbackReply(
+                for: text,
+                calculation: calculation,
+                mealType: detectedMealType,
+                reason: "还没有保存 DeepSeek API key。"
+            )
             messages.append(AssistantMessage(text: reply, isFromUser: false))
-            pendingCalculation = mode.supportsMealSaving ? calculation : nil
+            pendingMealType = detectedMealType
+            pendingCalculation = mode.supportsMealSaving && detectedMealType != nil ? calculation : nil
             return
         }
 
@@ -164,48 +174,74 @@ final class FoodAssistantViewModel: ObservableObject {
                 history: messages,
                 calculation: calculation,
                 mode: mode,
-                mealType: selectedMealType,
+                mealType: detectedMealType,
                 consumedAt: selectedDate,
                 dashboardContext: dashboardContext
             )
 
             messages.append(AssistantMessage(text: aiReply.reply, isFromUser: false))
-            if mode.supportsMealSaving, aiReply.shouldOfferSave {
+            let resolvedMealType = aiReply.mealType ?? detectedMealType
+            if mode.supportsMealSaving, aiReply.shouldOfferSave, let resolvedMealType {
+                pendingMealType = resolvedMealType
                 pendingCalculation = aiReply.estimatedCalculation(for: text) ?? calculation
             }
         } catch {
-            let reply = localFallbackReply(for: text, calculation: calculation, reason: error.localizedDescription)
+            let reply = localFallbackReply(
+                for: text,
+                calculation: calculation,
+                mealType: detectedMealType,
+                reason: error.localizedDescription
+            )
             messages.append(AssistantMessage(text: reply, isFromUser: false))
-            pendingCalculation = mode.supportsMealSaving ? calculation : nil
+            pendingMealType = detectedMealType
+            pendingCalculation = mode.supportsMealSaving && detectedMealType != nil ? calculation : nil
         }
     }
 
     func savePendingCalculation() {
-        guard let pendingCalculation else { return }
+        guard let pendingCalculation, let pendingMealType else { return }
 
         let record = SavedMealRecord(
             confirmedAt: Date(),
             consumedAt: selectedDate,
-            mealType: selectedMealType,
+            mealType: pendingMealType,
             calculation: pendingCalculation
         )
 
         recordStore.add(record)
         savedRecords = recordStore.load()
         self.pendingCalculation = nil
+        self.pendingMealType = nil
 
         let kcal = Int(record.calculation.totalEnergyKcal.rounded())
         messages.append(AssistantMessage(text: "已保存到本地记录：\(record.consumedAt.formatted(date: .abbreviated, time: .omitted)) \(record.mealType.title)，约 \(kcal) kcal。", isFromUser: false))
     }
 
-    private func localFallbackReply(for text: String, calculation: MealCalculationResult?, reason: String) -> String {
+    private func localFallbackReply(
+        for text: String,
+        calculation: MealCalculationResult?,
+        mealType: MealType?,
+        reason: String
+    ) -> String {
         if let calculation {
+            guard let mealType else {
+                return """
+                我先用本地 USDA Foundation Foods 做了粗略计算，但 AI 回复暂时不可用：\(reason)
+
+                估计摄入：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
+                合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+
+                这是早餐、午餐、晚餐、下午茶、加餐/零食还是夜宵？
+                """
+            }
+
             return """
             我先用本地 USDA Foundation Foods 做了粗略计算，但 AI 回复暂时不可用：\(reason)
 
             估计摄入：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
             合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
             可信度：\(calculation.confidence == "low" ? "较低" : "中等")
+            餐别：\(mealType.title)
 
             主要依据：\(calculation.items.map { $0.matchedFoodName }.joined(separator: "；"))
             是否确认保存这次饮食记录？
@@ -232,14 +268,14 @@ struct FoodAssistantEngine {
         history: [AssistantMessage],
         calculation: MealCalculationResult?,
         mode: AssistantMode,
-        mealType: MealType,
+        mealType: MealType?,
         consumedAt: Date,
         dashboardContext: String
     ) async throws -> AssistantAIReply {
         let context = PromptContext(
             userText: userText,
             mode: mode.title,
-            mealType: mealType.title,
+            mealType: mealType?.title,
             consumedAt: consumedAt,
             dashboardContext: dashboardContext,
             calculation: calculation
@@ -260,8 +296,9 @@ struct FoodAssistantEngine {
         5. 每次最多追问 1-2 个最影响结果的信息。如果信息已足够，可以给区间估算。
         6. 只有用户明确确认后才能保存记录。你现在只能建议用户确认，不能声称已经保存。
         7. 不要输出伪精确热量，优先使用整数和范围。
-        8. 如果模式是“健康助手”，提供通用建议、趋势判断、粗略减重估计，不要要求保存饮食记录，should_offer_save 必须为 false。
-        9. 输出严格 JSON，不要 Markdown，不要代码块。
+        8. 记录饮食/历史数据添加模式必须确认餐别；如果用户没有说明早餐、午餐、晚餐、下午茶、加餐/零食或夜宵，先追问餐别，不要要求保存。
+        9. 如果模式是“健康助手”，提供通用建议、趋势判断、粗略减重估计，不要要求保存饮食记录，should_offer_save 必须为 false。
+        10. 输出严格 JSON，不要 Markdown，不要代码块。
 
         JSON schema:
         {
@@ -272,6 +309,7 @@ struct FoodAssistantEngine {
           "estimated_energy_kcal": 430,
           "energy_low_kcal": 370,
           "energy_high_kcal": 500,
+          "meal_type": "breakfast|lunch|dinner|afternoon_tea|snack|late_night|other|null",
           "assumptions": ["用于保存快照的关键假设"],
           "source_summary": "USDA Foundation Foods 2026-04-30 + AI 推理估算"
         }
@@ -284,11 +322,12 @@ struct FoodAssistantEngine {
         请基于上面的本地计算上下文回复用户。
         模式是：\(mode.title)。
         如果是记录饮食或历史数据添加：
-        - 把 meal_type 和 consumed_at 纳入回复。
+        - 如果用户没有明确餐别，先追问“这是哪一餐？”，meal_type=null，should_offer_save=false。
+        - 如果已经明确餐别，把 meal_type 和 consumed_at 纳入回复。meal_type 只能使用 breakfast/lunch/dinner/afternoon_tea/snack/late_night/other。
         - 如果有 calculation，把它作为参考证据，结合用户描述判断是否需要修正或补充。
         - 如果没有 calculation，但用户描述足够可估算，可以给低可信度区间估算，并填写 estimated_energy_kcal / energy_low_kcal / energy_high_kcal。
         - 信息不足时追问食物、份量、克重、品牌/地区或配料中最关键的 1-2 项。
-        - 只要回复里询问“是否确认保存”，should_offer_save 就设为 true。
+        - 只有食物信息和餐别都明确时，才可以询问“是否确认保存”，并把 should_offer_save 设为 true。
         如果是健康助手：
         - 使用 dashboard_context 总结用户近况。
         - 可以估算热量缺口对应的大概体重变化，但必须说明只是粗略推断。
@@ -312,8 +351,13 @@ struct AssistantAIReply: Codable, Hashable {
     let estimatedEnergyKcal: Double?
     let energyLowKcal: Double?
     let energyHighKcal: Double?
+    let mealTypeRaw: String?
     let assumptions: [String]?
     let sourceSummary: String?
+
+    var mealType: MealType? {
+        MealType.fromAssistantValue(mealTypeRaw)
+    }
 
     enum CodingKeys: String, CodingKey {
         case reply
@@ -323,6 +367,7 @@ struct AssistantAIReply: Codable, Hashable {
         case estimatedEnergyKcal = "estimated_energy_kcal"
         case energyLowKcal = "energy_low_kcal"
         case energyHighKcal = "energy_high_kcal"
+        case mealTypeRaw = "meal_type"
         case assumptions
         case sourceSummary = "source_summary"
     }
@@ -426,7 +471,7 @@ struct MealRecordLocalStore {
 private struct PromptContext: Codable {
     let userText: String
     let mode: String
-    let mealType: String
+    let mealType: String?
     let consumedAt: Date
     let dashboardContext: String
     let calculation: MealCalculationResult?

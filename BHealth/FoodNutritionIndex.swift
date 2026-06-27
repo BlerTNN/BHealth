@@ -170,6 +170,54 @@ enum MealType: String, Codable, CaseIterable, Identifiable, Hashable {
             return "其他"
         }
     }
+
+    static func detected(in text: String) -> MealType? {
+        let normalized = text
+            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: .current)
+            .lowercased()
+
+        let rules: [(MealType, [String])] = [
+            (.breakfast, ["早餐", "早饭", "早上", "breakfast"]),
+            (.lunch, ["午餐", "午饭", "中饭", "lunch"]),
+            (.dinner, ["晚餐", "晚饭", "dinner", "supper"]),
+            (.afternoonTea, ["下午茶", "茶点", "afternoon tea"]),
+            (.lateNight, ["夜宵", "宵夜", "late night"]),
+            (.snack, ["加餐", "零食", "小食", "snack"]),
+            (.other, ["其他"])
+        ]
+
+        return rules.first { _, tokens in
+            tokens.contains { normalized.contains($0) }
+        }?.0
+    }
+
+    static func fromAssistantValue(_ value: String?) -> MealType? {
+        guard let value else { return nil }
+        let normalized = value
+            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: .current)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+
+        switch normalized {
+        case "breakfast", "早餐", "早饭":
+            return .breakfast
+        case "lunch", "午餐", "午饭", "中饭":
+            return .lunch
+        case "dinner", "晚餐", "晚饭":
+            return .dinner
+        case "afternoon_tea", "afternoontea", "下午茶":
+            return .afternoonTea
+        case "snack", "snacks", "加餐", "零食", "加餐_零食":
+            return .snack
+        case "late_night", "latenight", "夜宵", "宵夜":
+            return .lateNight
+        case "other", "其他":
+            return .other
+        default:
+            return detected(in: normalized)
+        }
+    }
 }
 
 struct SavedMealRecord: Codable, Identifiable, Hashable {

@@ -296,7 +296,7 @@ private struct YearCalendarView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            LazyVStack(alignment: .leading, spacing: 18) {
                 YearCalendarSummaryCard(summaries: healthStore.yearSummaries)
 
                 ForEach(monthGroups) { group in
@@ -309,6 +309,9 @@ private struct YearCalendarView: View {
         .background(AppColor.screenBackground.ignoresSafeArea())
         .navigationTitle("近一年日历")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(for: Date.self) { date in
+            DailyCalendarDetailView(date: date)
+        }
     }
 }
 
@@ -382,9 +385,7 @@ private struct CalendarMonthSection: View {
 
                 ForEach(slots.indices, id: \.self) { index in
                     if let summary = slots[index] {
-                        NavigationLink {
-                            DailyCalendarDetailView(date: summary.date)
-                        } label: {
+                        NavigationLink(value: summary.date) {
                             DayBalanceCell(summary: summary)
                         }
                         .buttonStyle(.plain)
@@ -908,12 +909,12 @@ private struct AssistantView: View {
                         if mode.supportsMealSaving {
                             MealLoggingContextCard(
                                 mode: mode,
-                                mealType: $viewModel.selectedMealType,
                                 date: $viewModel.selectedDate
                             )
                         }
 
                         QuickPromptRow(mode: mode) { message in
+                            isInputFocused = false
                             Task {
                                 await viewModel.send(message, dashboardContext: healthStore.assistantContextSummary)
                             }
@@ -933,6 +934,7 @@ private struct AssistantView: View {
                             if let calculation = viewModel.pendingCalculation {
                                 MealCalculationDraftCard(
                                     calculation: calculation,
+                                    mealType: viewModel.pendingMealType,
                                     saveAction: viewModel.savePendingCalculation
                                 )
                                 .id(calculation.id)
@@ -970,6 +972,7 @@ private struct AssistantView: View {
                 isSending: viewModel.isSending,
                 isFocused: $isInputFocused,
                 sendAction: {
+                    isInputFocused = false
                     Task {
                         await viewModel.sendDraftMessage(dashboardContext: healthStore.assistantContextSummary)
                     }
@@ -983,16 +986,10 @@ private struct AssistantView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button {
+                    isInputFocused = false
                     viewModel.closeMode()
                 } label: {
                     Label("返回", systemImage: "chevron.left")
-                }
-            }
-
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("完成") {
-                    isInputFocused = false
                 }
             }
         }
@@ -1079,26 +1076,23 @@ private struct AssistantHeader: View {
 
 private struct MealLoggingContextCard: View {
     let mode: AssistantMode
-    @Binding var mealType: MealType
     @Binding var date: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Picker("餐别", selection: $mealType) {
-                ForEach(MealType.allCases) { type in
-                    Text(type.title).tag(type)
-                }
-            }
-            .pickerStyle(.segmented)
-
             if mode == .historicalFoodLog {
                 DatePicker("记录日期", selection: $date, displayedComponents: .date)
                     .font(.subheadline.weight(.semibold))
+                    .tint(AppColor.healthGreen)
             } else {
-                Label("记录到今天 · \(mealType.title)", systemImage: "calendar")
+                Label("记录到今天", systemImage: "calendar")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
+
+            Label("餐别由 AI 根据对话确认", systemImage: "sparkles")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
         }
         .healthCard()
     }
@@ -1112,13 +1106,13 @@ private struct QuickPromptRow: View {
         switch mode {
         case .foodLog:
             return [
-                QuickPrompt(title: "早餐示例", icon: "sunrise.fill", message: "我早餐吃了一个鸡蛋、一杯拿铁和一片吐司。"),
-                QuickPrompt(title: "午餐示例", icon: "fork.knife", message: "午餐吃了鸡胸肉沙拉，帮我估算热量。")
+                QuickPrompt(title: "记录一餐", icon: "fork.knife", message: "我吃了一个鸡蛋、一杯拿铁和一片吐司。"),
+                QuickPrompt(title: "估算热量", icon: "sparkles", message: "我吃了鸡胸肉沙拉，帮我估算热量。")
             ]
         case .historicalFoodLog:
             return [
-                QuickPrompt(title: "昨日早餐", icon: "calendar.badge.clock", message: "补录这一天早餐：两个鸡蛋和一杯牛奶。"),
-                QuickPrompt(title: "补录晚餐", icon: "moon.fill", message: "这一天晚餐吃了牛肉饭，大概一碗。")
+                QuickPrompt(title: "补录一餐", icon: "calendar.badge.clock", message: "补录这一天：两个鸡蛋和一杯牛奶。"),
+                QuickPrompt(title: "补录热量", icon: "clock.arrow.circlepath", message: "这一天吃了牛肉饭，大概一碗。")
             ]
         case .healthCoach:
             return [
@@ -1276,6 +1270,7 @@ private struct LoadingBubble: View {
 
 private struct MealCalculationDraftCard: View {
     let calculation: MealCalculationResult
+    let mealType: MealType?
     let saveAction: () -> Void
 
     var body: some View {
@@ -1307,6 +1302,12 @@ private struct MealCalculationDraftCard: View {
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(.secondary)
                     .padding(.leading, 4)
+            }
+
+            if let mealType {
+                Label("餐别：\(mealType.title)", systemImage: "sparkles")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 8) {
