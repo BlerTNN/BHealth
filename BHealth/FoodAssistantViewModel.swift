@@ -169,16 +169,20 @@ final class FoodAssistantViewModel: ObservableObject {
                 session: &probabilisticSession,
                 referenceDate: referenceDate
             )
-            messages.append(AssistantMessage(text: result.reply, isFromUser: false))
-            if result.shouldOfferSave,
-               let calculation = result.calculation,
-               let mealType = result.mealType,
-               let consumedAt = result.consumedAt {
-                pendingMealType = mealType
-                pendingConsumedAt = consumedAt
-                pendingCalculation = calculation
+            if shouldAskAIToUnderstand(result) && hasAPIKey {
+                probabilisticSession = FoodConversationSession()
+            } else {
+                messages.append(AssistantMessage(text: result.reply, isFromUser: false))
+                if result.shouldOfferSave,
+                   let calculation = result.calculation,
+                   let mealType = result.mealType,
+                   let consumedAt = result.consumedAt {
+                    pendingMealType = mealType
+                    pendingConsumedAt = consumedAt
+                    pendingCalculation = calculation
+                }
+                return
             }
-            return
         }
 
         let calculation = mode.supportsMealSaving ? calculator.calculate(from: text) : nil
@@ -235,6 +239,12 @@ final class FoodAssistantViewModel: ObservableObject {
             pendingConsumedAt = detectedConsumedAt
             pendingCalculation = mode.supportsMealSaving && detectedMealType != nil && detectedConsumedAt != nil ? calculation : nil
         }
+    }
+
+    private func shouldAskAIToUnderstand(_ result: FoodAssistantTurnResult) -> Bool {
+        result.calculation == nil
+            && !result.shouldOfferSave
+            && result.reply.contains("我还没识别出具体食物")
     }
 
     func savePendingCalculation() {
@@ -313,7 +323,7 @@ final class FoodAssistantViewModel: ObservableObject {
     private func consumedAtCandidate(for mode: AssistantMode, text: String, referenceDate: Date) -> Date? {
         switch mode {
         case .foodLog:
-            return Calendar.current.startOfDay(for: referenceDate)
+            return MealDateResolver.detectedDate(in: text, referenceDate: referenceDate) ?? Calendar.current.startOfDay(for: referenceDate)
         case .historicalFoodLog:
             return MealDateResolver.detectedDate(in: text, referenceDate: referenceDate)
         case .healthCoach:
@@ -329,7 +339,7 @@ final class FoodAssistantViewModel: ObservableObject {
     ) -> Date? {
         switch mode {
         case .foodLog:
-            return Calendar.current.startOfDay(for: referenceDate)
+            return aiReply.consumedAt(referenceDate: referenceDate) ?? detectedDate ?? Calendar.current.startOfDay(for: referenceDate)
         case .historicalFoodLog:
             return aiReply.consumedAt(referenceDate: referenceDate) ?? detectedDate
         case .healthCoach:
@@ -380,7 +390,7 @@ struct FoodAssistantEngine {
         5. 每次最多追问 1-2 个最影响结果的信息。如果信息已足够，可以给区间估算。
         6. 只有用户明确确认后才能保存记录。你现在只能建议用户确认，不能声称已经保存。
         7. 不要输出伪精确热量，优先使用整数和范围。
-        8. 记录饮食/历史数据添加模式必须确认餐别；如果用户没有说明早餐、午餐、晚餐、下午茶、加餐/零食或夜宵，先追问餐别，不要要求保存。
+        8. 记录饮食/历史数据添加模式必须确认餐别；“早上/中午/晚上/今晚/昨晚”等自然表达可以分别理解为早餐/午餐/晚餐。如果用户没有说明早餐、午餐、晚餐、下午茶、加餐/零食或夜宵，先追问餐别，不要要求保存。
         9. 历史数据添加模式必须确认日期；如果日期不明确，先追问日期，不要要求保存。相对日期要基于 current_date 转成 YYYY-MM-DD。
         10. food_items 只写具体食品或饮品名称，不要写整句聊天、请求语气或“帮我估算”。
         11. 如果模式是“健康助手”，提供通用建议、趋势判断、粗略减重估计，不要要求保存饮食记录，should_offer_save 必须为 false。
@@ -413,7 +423,7 @@ struct FoodAssistantEngine {
         - 如果用户没有明确餐别，先追问“这是哪一餐？”，meal_type=null，should_offer_save=false。
         - 如果是历史数据添加且用户没有明确日期，先追问“这条记录是哪一天？”，consumed_at=null，should_offer_save=false。
         - 如果已经明确餐别，把 meal_type 和 consumed_at 纳入回复。meal_type 只能使用 breakfast/lunch/dinner/afternoon_tea/snack/late_night/other，consumed_at 只能使用 YYYY-MM-DD 或 null。
-        - 如果是记录饮食，consumed_at 使用 current_date 的日期。
+        - 如果是记录饮食，consumed_at 默认使用 current_date 的日期；但用户明确说“昨天/昨晚/前天”等相对日期时，要基于 current_date 转成对应日期。
         - 如果有 calculation，把它作为参考证据，结合用户描述判断是否需要修正或补充。
         - 如果没有 calculation，但用户描述足够可估算，可以给低可信度区间估算，并填写 estimated_energy_kcal / energy_low_kcal / energy_high_kcal。
         - 信息不足时追问食物、份量、克重、品牌/地区或配料中最关键的 1-2 项。

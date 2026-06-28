@@ -176,8 +176,9 @@ enum MealFoodNameFormatter {
 
         let prefixes = [
             "我早餐吃了", "我午餐吃了", "我晚餐吃了", "我早饭吃了", "我午饭吃了", "我晚饭吃了",
+            "我昨晚吃了", "我今晚吃了", "昨晚吃了", "今晚吃了", "晚上吃了",
             "早餐吃了", "午餐吃了", "晚餐吃了", "早饭吃了", "午饭吃了", "晚饭吃了",
-            "今天吃了", "昨天吃了", "前天吃了", "这一天吃了", "补录这一天", "补录昨天", "补录前天",
+            "今天吃了", "昨天吃了", "昨日吃了", "前天吃了", "这一天吃了", "补录这一天", "补录昨天", "补录前天",
             "我吃了", "吃了", "补录", "记录"
         ]
         for prefix in prefixes where text.hasPrefix(prefix) {
@@ -267,10 +268,10 @@ enum MealType: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
 
         let rules: [(MealType, [String])] = [
             (.breakfast, ["早餐", "早饭", "早上", "breakfast"]),
-            (.lunch, ["午餐", "午饭", "中饭", "lunch"]),
-            (.dinner, ["晚餐", "晚饭", "dinner", "supper"]),
+            (.lunch, ["午餐", "午饭", "中饭", "中午", "lunch"]),
             (.afternoonTea, ["下午茶", "茶点", "afternoon tea"]),
             (.lateNight, ["夜宵", "宵夜", "late night"]),
+            (.dinner, ["晚餐", "晚饭", "晚上", "今晚", "昨晚", "dinner", "supper"]),
             (.snack, ["加餐", "零食", "小食", "snack"]),
             (.other, ["其他"])
         ]

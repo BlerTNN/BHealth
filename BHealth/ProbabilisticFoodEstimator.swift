@@ -140,15 +140,37 @@ private struct FoodEventParser {
         quickEstimate: Bool
     ) -> FoodEventDraft? {
         let candidates = ontology.resolve(fragment)
-        guard let best = candidates.first else { return nil }
+        let resolvedCandidates: [FoodCandidate]
+        let selectedID: String?
+        let selectedCategory: FoodCategory?
+        let evidenceSource: FoodEvidenceSource
+        let evidenceDescription: String
+
+        if let best = candidates.first {
+            resolvedCandidates = candidates
+            selectedID = best.confidence >= 0.72 ? best.foodID : nil
+            selectedCategory = best.confidence >= 0.72 ? best.category : nil
+            evidenceSource = .databaseMatch
+            evidenceDescription = "识别为\(best.displayName)"
+        } else if let fallback = openVocabularyCandidate(from: fragment, wholeMessage: wholeMessage) {
+            resolvedCandidates = [fallback]
+            selectedID = fallback.foodID
+            selectedCategory = fallback.category
+            evidenceSource = .assumedDefault
+            evidenceDescription = "按用户原话理解为\(fallback.displayName)，使用开放食物类别先验估算"
+        } else {
+            return nil
+        }
+
+        guard let best = resolvedCandidates.first else { return nil }
 
         var draft = FoodEventDraft(
-            rawText: fragment,
+            rawText: best.displayName,
             mealType: mealType,
             consumedAt: consumedAt,
-            foodCandidates: candidates,
-            selectedFoodID: best.confidence >= 0.72 ? best.foodID : nil,
-            foodCategory: best.confidence >= 0.72 ? best.category : nil,
+            foodCandidates: resolvedCandidates,
+            selectedFoodID: selectedID,
+            foodCategory: selectedCategory,
             explicitServingCount: servingCount(in: fragment),
             userRequestedQuickEstimate: quickEstimate
         )
@@ -157,12 +179,137 @@ private struct FoodEventParser {
             FoodEvidence(
                 field: "food_identity",
                 normalizedValue: best.displayName,
-                source: .databaseMatch,
+                source: evidenceSource,
                 confidence: best.confidence,
-                userVisibleDescription: "识别为\(best.displayName)"
+                userVisibleDescription: evidenceDescription
             )
         )
         return draft
+    }
+
+    private func openVocabularyCandidate(from fragment: String, wholeMessage: String) -> FoodCandidate? {
+        let foodName = likelyFoodName(from: fragment, fallback: wholeMessage)
+        guard isLikelyFoodName(foodName) else { return nil }
+
+        let category = inferredCategory(for: foodName, context: wholeMessage)
+        let foodID = openVocabularyFoodID(for: foodName, category: category)
+        let displayName = displayName(for: foodName, foodID: foodID)
+        let confidence = foodID == "luzhu_huoshao" ? 0.74 : 0.56
+
+        return FoodCandidate(
+            foodID: foodID,
+            displayName: displayName,
+            category: category,
+            confidence: confidence
+        )
+    }
+
+    private func likelyFoodName(from fragment: String, fallback: String) -> String {
+        let cleanedFragment = cleanedOpenVocabularyText(fragment)
+        if isLikelyFoodName(cleanedFragment) {
+            return cleanedFragment
+        }
+        return cleanedOpenVocabularyText(fallback)
+    }
+
+    private func cleanedOpenVocabularyText(_ value: String) -> String {
+        var text = MealFoodNameFormatter.cleaned(value)
+
+        let patterns = [
+            #"^[\s我]*(?:帮我)?(?:记录|补录|估算|算)?(?:一下)?\s*"#,
+            #"(?:吃了|吃过|吃|喝了|喝过|喝)"#,
+            #"[一二两三四五六七八九十半\d]+(?:\.\d+)?\s*(?:大|小|普通|满)?(?:碗|杯|份|个|颗|只|片|盘|盒|袋|把|勺|克|g|毫升|ml)"#,
+            #"(?:大概|大约|约|左右|差不多|直接估算|不知道|不记得|帮我估算(?:一下)?热量|多少(?:热量|卡路里|卡))"#
+        ]
+        for pattern in patterns {
+            text = replacingMatches(in: text, pattern: pattern, with: "")
+        }
+
+        let tokens = [
+            "大前天", "前天", "昨日", "昨天", "昨晚", "今日", "今天", "今晚",
+            "早上", "上午", "中午", "下午", "晚上", "夜里",
+            "早餐", "早饭", "午餐", "午饭", "中饭", "晚餐", "晚饭", "下午茶", "夜宵", "宵夜",
+            "我", "的", "了", "，", ",", "。", ".", "！", "!", "？", "?"
+        ]
+        for token in tokens {
+            text = text.replacingOccurrences(of: token, with: "")
+        }
+
+        return text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+    }
+
+    private func replacingMatches(in text: String, pattern: String, with replacement: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return text
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: replacement)
+    }
+
+    private func isLikelyFoodName(_ value: String) -> Bool {
+        let text = value.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+        guard text.count >= 2 else { return false }
+
+        let genericPhrases = [
+            "记录", "补录", "估算", "热量", "卡路里", "饮食", "早餐", "午餐", "晚餐", "今天", "昨天", "前天",
+            "细节", "详情", "信息", "直接", "不知道", "不记得"
+        ]
+        if genericPhrases.contains(text) { return false }
+        return text.contains { !$0.isNumber && !$0.isWhitespace }
+    }
+
+    private func inferredCategory(for foodName: String, context: String) -> FoodCategory {
+        let text = "\(foodName) \(context)"
+        if text.contains("卤煮") || text.contains("麻辣烫") || text.contains("冒菜") || text.contains("火锅") || text.contains("汤") {
+            return .soup
+        }
+        if text.contains("面") || text.contains("粉") || text.contains("米线") || text.contains("河粉") {
+            return .noodle
+        }
+        if text.contains("粥") || text.contains("稀饭") {
+            return .porridge
+        }
+        if text.contains("饭") || text.contains("盖饭") || text.contains("炒饭") {
+            return .cookedRice
+        }
+        if text.contains("奶茶") || text.contains("咖啡") || text.contains("饮料") || text.contains("可乐") || text.contains("啤酒") || text.contains("豆浆") || text.contains("牛奶") {
+            return .beverage
+        }
+        if text.contains("包") || text.contains("饼") || text.contains("馒头") || text.contains("面包") || text.contains("吐司") || text.contains("火烧") {
+            return .bakery
+        }
+        if text.contains("苹果") || text.contains("香蕉") || text.contains("水果") {
+            return .fruit
+        }
+        return .homeDish
+    }
+
+    private func openVocabularyFoodID(for foodName: String, category: FoodCategory) -> String {
+        if foodName.contains("卤煮") {
+            return "luzhu_huoshao"
+        }
+
+        switch category {
+        case .soup:
+            return "broad_soup_stew"
+        case .noodle:
+            return "broad_noodle_bowl"
+        case .beverage:
+            return "broad_beverage"
+        case .bakery:
+            return "broad_bakery"
+        case .porridge:
+            return "broad_porridge"
+        case .cookedRice, .homeDish, .egg, .fruit, .nut, .unknown:
+            return "broad_mixed_dish"
+        }
+    }
+
+    private func displayName(for foodName: String, foodID: String) -> String {
+        if foodID == "luzhu_huoshao" {
+            return "卤煮火烧"
+        }
+        return foodName
     }
 
     private func merge(
@@ -240,7 +387,7 @@ private struct FoodEventParser {
     ) -> Date? {
         switch mode {
         case .foodLog:
-            return Calendar.current.startOfDay(for: referenceDate)
+            return MealDateResolver.detectedDate(in: userText, referenceDate: referenceDate) ?? Calendar.current.startOfDay(for: referenceDate)
         case .historicalFoodLog:
             return MealDateResolver.detectedDate(in: userText, referenceDate: referenceDate) ?? existingDrafts.first?.consumedAt
         case .healthCoach:
@@ -472,6 +619,7 @@ private struct FoodOntologyRepository {
         FoodEntry(id: "banana", name: "香蕉", category: .fruit, aliases: ["香蕉"]),
         FoodEntry(id: "nuts", name: "坚果", category: .nut, aliases: ["坚果", "杏仁", "核桃"]),
         FoodEntry(id: "noodles", name: "面条", category: .noodle, aliases: ["面条", "面", "汤面"]),
+        FoodEntry(id: "luzhu_huoshao", name: "卤煮火烧", category: .soup, aliases: ["卤煮火烧", "卤煮"]),
         FoodEntry(id: "home_stir_fry", name: "家常炒菜", category: .homeDish, aliases: ["鱼香肉丝", "炒菜", "一盘菜"])
     ]
 
@@ -517,9 +665,10 @@ private struct CalorieMonteCarloEstimator {
         )
 
         let items = zip(drafts, itemResults).map { draft, result in
-            MealItemCalculation(
-                rawText: draft.rawText,
-                matchedFoodName: draft.foodCandidates.first?.displayName ?? draft.rawText,
+            let displayName = draft.foodCandidates.first?.displayName ?? MealFoodNameFormatter.cleaned(draft.rawText)
+            return MealItemCalculation(
+                rawText: displayName.isEmpty ? draft.rawText : displayName,
+                matchedFoodName: displayName.isEmpty ? draft.rawText : displayName,
                 fdcId: -1,
                 estimatedGrams: result.medianGrams,
                 energyKcal: result.estimate.median,
@@ -760,6 +909,20 @@ private struct NutritionRepository {
             return Nutrient(energyKcalPer100g: 89, sourceID: "USDA Foundation Foods fallback")
         case "nuts":
             return Nutrient(energyKcalPer100g: 590, sourceID: "USDA Foundation Foods fallback")
+        case "luzhu_huoshao":
+            return Nutrient(energyKcalPer100g: 165, sourceID: "curated_cn_common_food_v1")
+        case "broad_soup_stew":
+            return Nutrient(energyKcalPer100g: 115, sourceID: "broad_category_prior_v1")
+        case "broad_noodle_bowl":
+            return Nutrient(energyKcalPer100g: 135, sourceID: "broad_category_prior_v1")
+        case "broad_beverage":
+            return Nutrient(energyKcalPer100g: 55, sourceID: "broad_category_prior_v1")
+        case "broad_bakery":
+            return Nutrient(energyKcalPer100g: 260, sourceID: "broad_category_prior_v1")
+        case "broad_porridge":
+            return Nutrient(energyKcalPer100g: 60, sourceID: "broad_category_prior_v1")
+        case "broad_mixed_dish":
+            return Nutrient(energyKcalPer100g: 180, sourceID: "broad_category_prior_v1")
         default:
             return Nutrient(energyKcalPer100g: 120, sourceID: "broad_category_prior_v1")
         }
@@ -874,6 +1037,30 @@ private struct RecipePrototypeRepository {
     }
 
     func prototype(for foodID: String, consistency: ConsistencyClass?) -> Prototype? {
+        if foodID == "luzhu_huoshao" {
+            return Prototype(
+                energyDensity: TriangularDistribution(min: 120, mode: 165, max: 230),
+                massDensity: TriangularDistribution(min: 0.95, mode: 1.03, max: 1.12)
+            )
+        }
+        if foodID == "broad_soup_stew" {
+            return Prototype(
+                energyDensity: TriangularDistribution(min: 65, mode: 115, max: 210),
+                massDensity: TriangularDistribution(min: 0.90, mode: 1.0, max: 1.12)
+            )
+        }
+        if foodID == "broad_noodle_bowl" {
+            return Prototype(
+                energyDensity: TriangularDistribution(min: 95, mode: 135, max: 220),
+                massDensity: TriangularDistribution(min: 0.90, mode: 1.0, max: 1.10)
+            )
+        }
+        if foodID == "broad_mixed_dish" {
+            return Prototype(
+                energyDensity: TriangularDistribution(min: 100, mode: 180, max: 280),
+                massDensity: TriangularDistribution(min: 0.80, mode: 0.95, max: 1.10)
+            )
+        }
         guard foodID == "millet_porridge" || foodID == "rice_congee" else { return nil }
         let density = TriangularDistribution(min: 0.96, mode: 1.02, max: 1.10)
         switch consistency ?? .unknown {

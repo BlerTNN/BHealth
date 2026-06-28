@@ -72,4 +72,42 @@ struct BHealthTests {
         #expect(itemNames.contains("豆浆"))
     }
 
+    @Test func openVocabularyChineseDishUsesUserPhraseAndRelativeDate() async throws {
+        var session = FoodConversationSession()
+        let referenceDate = Date(timeIntervalSince1970: 1_780_000_000)
+        let result = FoodConversationCoordinator().handle(
+            userText: "昨晚吃了一碗卤煮火烧",
+            mode: .foodLog,
+            session: &session,
+            referenceDate: referenceDate
+        )
+
+        #expect(result.shouldOfferSave)
+        #expect(result.mealType == .dinner)
+        #expect(result.calculation?.foodDisplayName == "卤煮火烧")
+        #expect((result.calculation?.totalEnergyKcal ?? 0) > 0)
+
+        let expectedDay = Calendar.current.date(
+            byAdding: .day,
+            value: -1,
+            to: Calendar.current.startOfDay(for: referenceDate)
+        )
+        #expect(result.consumedAt == expectedDay)
+    }
+
+    @Test func openVocabularyUnknownDishStillEstimatesInsteadOfRejecting() async throws {
+        var session = FoodConversationSession()
+        let result = FoodConversationCoordinator().handle(
+            userText: "午餐吃了一份麻辣烫",
+            mode: .foodLog,
+            session: &session,
+            referenceDate: Date(timeIntervalSince1970: 1_780_000_000)
+        )
+
+        #expect(result.shouldOfferSave)
+        #expect(result.mealType == .lunch)
+        #expect(result.calculation?.foodDisplayName == "麻辣烫")
+        #expect(!result.reply.contains("我还没识别出具体食物"))
+    }
+
 }
