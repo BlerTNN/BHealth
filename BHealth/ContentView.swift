@@ -282,20 +282,8 @@ private struct WeeklyTrendChartCard: View {
 
 private struct YearCalendarView: View {
     @EnvironmentObject private var healthStore: HealthDashboardStore
-
-    private var monthGroups: [YearMonthGroup] {
-        let calendar = Calendar.current
-        let grouped = Dictionary(grouping: healthStore.yearSummaries) { summary in
-            calendar.date(from: calendar.dateComponents([.year, .month], from: summary.date)) ?? summary.date
-        }
-
-        return grouped.keys.sorted(by: >).map { monthStart in
-            YearMonthGroup(
-                monthStart: monthStart,
-                summaries: (grouped[monthStart] ?? []).sorted { $0.date < $1.date }
-            )
-        }
-    }
+    @State private var monthGroups: [YearMonthGroup] = []
+    @State private var selectedDate: Date?
 
     var body: some View {
         ScrollView {
@@ -303,7 +291,9 @@ private struct YearCalendarView: View {
                 YearCalendarSummaryCard(summaries: healthStore.yearSummaries)
 
                 ForEach(monthGroups) { group in
-                    CalendarMonthSection(group: group)
+                    CalendarMonthSection(group: group) { date in
+                        selectedDate = date
+                    }
                 }
             }
             .padding(.horizontal, 20)
@@ -312,9 +302,28 @@ private struct YearCalendarView: View {
         .background(AppColor.screenBackground.ignoresSafeArea())
         .navigationTitle("近一年日历")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(for: Date.self) { date in
-            DailyCalendarDetailView(date: date)
+        .navigationDestination(isPresented: Binding(
+            get: { selectedDate != nil },
+            set: { isPresented in
+                if !isPresented {
+                    selectedDate = nil
+                }
+            }
+        )) {
+            if let selectedDate {
+                DailyCalendarDetailView(date: selectedDate)
+            }
         }
+        .onAppear {
+            refreshMonthGroups(from: healthStore.yearSummaries)
+        }
+        .onChange(of: healthStore.yearSummaries) { _, summaries in
+            refreshMonthGroups(from: summaries)
+        }
+    }
+
+    private func refreshMonthGroups(from summaries: [DailyHealthOverview]) {
+        monthGroups = YearCalendarDataBuilder.monthGroups(from: summaries)
     }
 }
 
@@ -354,24 +363,57 @@ private struct YearCalendarSummaryCard: View {
 
 private struct YearMonthGroup: Identifiable {
     let monthStart: Date
-    let summaries: [DailyHealthOverview]
+    let slots: [CalendarMonthSlot]
 
     var id: Date { monthStart }
 }
 
+private struct CalendarMonthSlot: Identifiable {
+    let id: String
+    let summary: DailyHealthOverview?
+}
+
+private enum YearCalendarDataBuilder {
+    static func monthGroups(from summaries: [DailyHealthOverview], calendar: Calendar = .current) -> [YearMonthGroup] {
+        let grouped = Dictionary(grouping: summaries) { summary in
+            calendar.date(from: calendar.dateComponents([.year, .month], from: summary.date)) ?? summary.date
+        }
+
+        return grouped.keys.sorted(by: >).map { monthStart in
+            let monthSummaries = (grouped[monthStart] ?? []).sorted { $0.date < $1.date }
+            return YearMonthGroup(
+                monthStart: monthStart,
+                slots: slots(for: monthStart, summaries: monthSummaries, calendar: calendar)
+            )
+        }
+    }
+
+    private static func slots(
+        for monthStart: Date,
+        summaries: [DailyHealthOverview],
+        calendar: Calendar
+    ) -> [CalendarMonthSlot] {
+        guard let firstSummary = summaries.first else { return [] }
+
+        let weekdayOffset = calendar.component(.weekday, from: monthStart) - 1
+        let dayOffset = calendar.component(.day, from: firstSummary.date) - 1
+        let placeholders = (0..<(weekdayOffset + dayOffset)).map { index in
+            CalendarMonthSlot(id: "\(monthStart.timeIntervalSince1970)-placeholder-\(index)", summary: nil)
+        }
+        let days = summaries.map { summary in
+            CalendarMonthSlot(id: "day-\(summary.id.timeIntervalSince1970)", summary: summary)
+        }
+
+        return placeholders + days
+    }
+}
+
 private struct CalendarMonthSection: View {
     let group: YearMonthGroup
+    let selectDate: (Date) -> Void
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
     private let weekdaySymbols = ["日", "一", "二", "三", "四", "五", "六"]
-
-    private var slots: [DailyHealthOverview?] {
-        guard let firstSummary = group.summaries.first else { return [] }
-        let calendar = Calendar.current
-        let weekdayOffset = calendar.component(.weekday, from: group.monthStart) - 1
-        let dayOffset = calendar.component(.day, from: firstSummary.date) - 1
-        return Array(repeating: nil, count: weekdayOffset + dayOffset) + group.summaries.map(Optional.some)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -386,9 +428,11 @@ private struct CalendarMonthSection: View {
                         .frame(maxWidth: .infinity)
                 }
 
-                ForEach(slots.indices, id: \.self) { index in
-                    if let summary = slots[index] {
-                        NavigationLink(value: summary.date) {
+                ForEach(group.slots) { slot in
+                    if let summary = slot.summary {
+                        Button {
+                            selectDate(summary.date)
+                        } label: {
                             DayBalanceCell(summary: summary)
                         }
                         .buttonStyle(.plain)
@@ -722,7 +766,20 @@ private struct MealRecordRow: View {
 private struct MealHistoryListView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var healthStore: HealthDashboardStore
+    @State private var selectedDate = Calendar.current.startOfDay(for: Date())
+    @State private var didSetInitialDate = false
     @State private var editingRecord: SavedMealRecord?
+
+    private var selectedRecords: [SavedMealRecord] {
+        let calendar = Calendar.current
+        return healthStore.savedMealRecords.filter {
+            calendar.isDate($0.consumedAt, inSameDayAs: selectedDate)
+        }
+    }
+
+    private var selectedTotalKcal: Int {
+        Int(selectedRecords.reduce(0) { $0 + $1.calculation.totalEnergyKcal }.rounded())
+    }
 
     var body: some View {
         NavigationStack {
@@ -730,18 +787,46 @@ private struct MealHistoryListView: View {
                 if healthStore.savedMealRecords.isEmpty {
                     ContentUnavailableView("暂无记录", systemImage: "fork.knife", description: Text("在 AI 助手中确认保存后会出现在这里。"))
                 } else {
-                    ForEach(healthStore.savedMealRecords) { record in
-                        Button {
-                            editingRecord = record
-                        } label: {
-                            MealRecordRow(record: record)
+                    Section {
+                        DatePicker("日期", selection: $selectedDate, displayedComponents: .date)
+                            .datePickerStyle(.compact)
+                            .tint(AppColor.healthGreen)
+
+                        HStack {
+                            Label("\(selectedRecords.count) 条记录", systemImage: "calendar")
+                                .font(.subheadline.weight(.semibold))
+
+                            Spacer()
+
+                            Text("\(selectedTotalKcal) kcal")
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(AppColor.healthGreen)
+                                .monospacedDigit()
                         }
-                        .buttonStyle(.plain)
-                        .swipeActions {
-                            Button(role: .destructive) {
-                                healthStore.deleteMealRecord(record)
-                            } label: {
-                                Label("删除", systemImage: "trash")
+                    }
+
+                    if selectedRecords.isEmpty {
+                        ContentUnavailableView(
+                            "当天暂无记录",
+                            systemImage: "calendar.badge.exclamationmark",
+                            description: Text("请选择其他日期，或在 AI 助手中补录这一天的饮食。")
+                        )
+                    } else {
+                        Section("当日记录") {
+                            ForEach(selectedRecords) { record in
+                                Button {
+                                    editingRecord = record
+                                } label: {
+                                    MealRecordRow(record: record)
+                                }
+                                .buttonStyle(.plain)
+                                .swipeActions {
+                                    Button(role: .destructive) {
+                                        healthStore.deleteMealRecord(record)
+                                    } label: {
+                                        Label("删除", systemImage: "trash")
+                                    }
+                                }
                             }
                         }
                     }
@@ -755,6 +840,9 @@ private struct MealHistoryListView: View {
                     }
                 }
             }
+            .onAppear {
+                setInitialSelectedDateIfNeeded()
+            }
             .sheet(item: $editingRecord) { record in
                 MealRecordEditorView(record: record) { updatedRecord in
                     healthStore.updateMealRecord(updatedRecord)
@@ -762,6 +850,14 @@ private struct MealHistoryListView: View {
                     healthStore.deleteMealRecord(record)
                 }
             }
+        }
+    }
+
+    private func setInitialSelectedDateIfNeeded() {
+        guard !didSetInitialDate else { return }
+        didSetInitialDate = true
+        if let latestDate = healthStore.savedMealRecords.first?.consumedAt {
+            selectedDate = Calendar.current.startOfDay(for: latestDate)
         }
     }
 }

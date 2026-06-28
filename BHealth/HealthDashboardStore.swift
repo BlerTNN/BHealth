@@ -190,11 +190,12 @@ final class HealthDashboardStore: ObservableObject {
         let calendar = Calendar.current
         let todayStart = calendar.startOfDay(for: Date())
         let basal = estimatedBasalEnergyKcal()
+        let intakeByDay = intakeTotalsByDay(calendar: calendar)
         var summaries: [DailyHealthOverview] = []
 
         for offset in stride(from: -364, through: 0, by: 1) {
             guard let day = calendar.date(byAdding: .day, value: offset, to: todayStart) else { continue }
-            let intake = intakeKcal(on: day)
+            let intake = intakeByDay[day] ?? 0
             let metrics = healthMetricsByDay[day]
 
             summaries.append(
@@ -214,11 +215,10 @@ final class HealthDashboardStore: ObservableObject {
         today = summaries.last ?? DailyHealthOverview.empty(for: Date())
     }
 
-    private func intakeKcal(on day: Date) -> Double {
-        let calendar = Calendar.current
-        return savedMealRecords.reduce(0) { partial, record in
-            guard calendar.isDate(record.consumedAt, inSameDayAs: day) else { return partial }
-            return partial + record.calculation.totalEnergyKcal
+    private func intakeTotalsByDay(calendar: Calendar) -> [Date: Double] {
+        savedMealRecords.reduce(into: [Date: Double]()) { result, record in
+            let day = calendar.startOfDay(for: record.consumedAt)
+            result[day, default: 0] += record.calculation.totalEnergyKcal
         }
     }
 
