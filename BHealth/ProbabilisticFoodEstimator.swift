@@ -151,7 +151,7 @@ private struct FoodEventParser {
         consumedAt: Date?,
         quickEstimate: Bool
     ) -> FoodEventDraft? {
-        let candidates = ontology.resolve(fragment)
+        let candidates = isEnergyBowl(fragment) ? [] : ontology.resolve(fragment)
         let resolvedCandidates: [FoodCandidate]
         let selectedID: String?
         let selectedCategory: FoodCategory?
@@ -231,6 +231,10 @@ private struct FoodEventParser {
             #"^[\s我]*(?:帮我)?(?:记录|补录|估算|算)?(?:一下)?\s*"#,
             #"(?:吃了|吃过|吃|喝了|喝过|喝)"#,
             #"[一二两三四五六七八九十半\d]+(?:\.\d+)?\s*(?:大|小|普通|满)?(?:碗|杯|份|个|颗|只|片|盘|盒|袋|把|勺|克|g|毫升|ml)"#,
+            #"\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2}"#,
+            #"\d{1,2}月\d{1,2}[日号]?"#,
+            #"\d+(?:\.\d+)?\s*(?:kcal|千卡|大卡|卡路里)"#,
+            #"(?:已记录|已保存|待确认记录|待确认|请确认是否正确|请确认|如果正确|系统将估算热量并保存|系统将|保存记录)"#,
             #"(?:大概|大约|约|左右|差不多|直接估算|不知道|不记得|帮我估算(?:一下)?热量|多少(?:热量|卡路里|卡))"#
         ]
         for pattern in patterns {
@@ -264,9 +268,17 @@ private struct FoodEventParser {
 
         let genericPhrases = [
             "记录", "补录", "估算", "热量", "卡路里", "饮食", "早餐", "午餐", "晚餐", "今天", "昨天", "前天",
-            "细节", "详情", "信息", "直接", "不知道", "不记得"
+            "细节", "详情", "信息", "直接", "不知道", "不记得", "已记录", "待确认", "请确认"
         ]
         if genericPhrases.contains(text) { return false }
+        let rejectedPatterns = [
+            #"^\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2}$"#,
+            #"^\d{1,2}[-/\.]\d{1,2}$"#,
+            #"^\d+(?:\.\d+)?\s*(?:kcal|千卡|大卡|卡路里)$"#
+        ]
+        if rejectedPatterns.contains(where: { text.range(of: $0, options: .regularExpression) != nil }) {
+            return false
+        }
         return text.contains { !$0.isNumber && !$0.isWhitespace }
     }
 
@@ -297,6 +309,9 @@ private struct FoodEventParser {
     }
 
     private func openVocabularyFoodID(for foodName: String, category: FoodCategory) -> String {
+        if isEnergyBowl(foodName) {
+            return "broad_energy_bowl"
+        }
         if foodName.contains("卤煮") {
             return "luzhu_huoshao"
         }
@@ -321,7 +336,18 @@ private struct FoodEventParser {
         if foodID == "luzhu_huoshao" {
             return "卤煮火烧"
         }
+        if foodID == "broad_energy_bowl", foodName.isEmpty {
+            return "能量碗"
+        }
         return foodName
+    }
+
+    private func isEnergyBowl(_ value: String) -> Bool {
+        let normalized = value.lowercased()
+        return normalized.contains("能量碗")
+            || normalized.contains("沙拉碗")
+            || normalized.contains("energy bowl")
+            || normalized.contains("poke bowl")
     }
 
     private func merge(
@@ -940,6 +966,8 @@ private struct NutritionRepository {
             return Nutrient(energyKcalPer100g: 260, sourceID: "broad_category_prior_v1")
         case "broad_porridge":
             return Nutrient(energyKcalPer100g: 60, sourceID: "broad_category_prior_v1")
+        case "broad_energy_bowl":
+            return Nutrient(energyKcalPer100g: 140, sourceID: "broad_category_prior_v1")
         case "broad_mixed_dish":
             return Nutrient(energyKcalPer100g: 180, sourceID: "broad_category_prior_v1")
         default:
@@ -1072,6 +1100,12 @@ private struct RecipePrototypeRepository {
             return Prototype(
                 energyDensity: TriangularDistribution(min: 95, mode: 135, max: 220),
                 massDensity: TriangularDistribution(min: 0.90, mode: 1.0, max: 1.10)
+            )
+        }
+        if foodID == "broad_energy_bowl" {
+            return Prototype(
+                energyDensity: TriangularDistribution(min: 90, mode: 140, max: 210),
+                massDensity: TriangularDistribution(min: 0.82, mode: 0.95, max: 1.05)
             )
         }
         if foodID == "broad_mixed_dish" {

@@ -429,6 +429,14 @@ final class FoodNutritionIndex {
 
 struct FoodMentionExtractor {
     static func mentions(from text: String) -> [FoodMention] {
+        let whole = cleaned(text)
+        if shouldKeepAsCompositeMeal(whole) {
+            let composite = strippedNonFoodNoise(whole)
+            if isMeaningfulFoodFragment(composite) {
+                return [FoodMention(rawText: composite, query: FoodQueryNormalizer.expandedSearchText(for: composite))]
+            }
+        }
+
         let separators = CharacterSet(charactersIn: "，,、;；\n")
         let roughParts = text
             .components(separatedBy: separators)
@@ -436,14 +444,69 @@ struct FoodMentionExtractor {
             .flatMap { $0.components(separatedBy: "以及") }
             .flatMap { $0.components(separatedBy: "还有") }
             .map { cleaned($0) }
-            .filter { !$0.isEmpty }
+            .map { strippedNonFoodNoise($0) }
+            .filter { isMeaningfulFoodFragment($0) }
 
-        let parts = roughParts.isEmpty ? [cleaned(text)] : roughParts
+        let parts = roughParts.isEmpty ? [strippedNonFoodNoise(cleaned(text))] : roughParts
+            .filter { isMeaningfulFoodFragment($0) }
         return parts.map { FoodMention(rawText: $0, query: FoodQueryNormalizer.expandedSearchText(for: $0)) }
     }
 
     private static func cleaned(_ value: String) -> String {
         MealFoodNameFormatter.cleaned(value)
+    }
+
+    private static func shouldKeepAsCompositeMeal(_ value: String) -> Bool {
+        let normalized = value.lowercased()
+        let compositeMarkers = ["能量碗", "沙拉碗", "energy bowl", "poke bowl"]
+        return compositeMarkers.contains { normalized.contains($0) }
+    }
+
+    private static func strippedNonFoodNoise(_ value: String) -> String {
+        var text = value
+        let patterns = [
+            #"\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2}"#,
+            #"\d{1,2}月\d{1,2}[日号]?"#,
+            #"\d+(?:\.\d+)?\s*(?:kcal|千卡|大卡|卡路里)"#,
+            #"(?:已记录|已保存|待确认记录|待确认|请确认是否正确|请确认|如果正确|系统将估算热量并保存|系统将|保存记录)"#
+        ]
+        for pattern in patterns {
+            text = replacingMatches(in: text, pattern: pattern, with: "")
+        }
+        return text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+    }
+
+    private static func isMeaningfulFoodFragment(_ value: String) -> Bool {
+        let text = value.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+        guard text.count >= 2 else { return false }
+
+        let lower = text.lowercased()
+        let rejectedPatterns = [
+            #"^\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2}$"#,
+            #"^\d{1,2}[-/\.]\d{1,2}$"#,
+            #"^\d{1,2}月\d{1,2}[日号]?$"#,
+            #"^\d+(?:\.\d+)?\s*(?:kcal|千卡|大卡|卡路里)$"#
+        ]
+        if rejectedPatterns.contains(where: { lower.range(of: $0, options: .regularExpression) != nil }) {
+            return false
+        }
+
+        let administrativePhrases = [
+            "已记录", "已保存", "待确认", "请确认", "如果正确", "系统将", "估算热量并保存"
+        ]
+        if administrativePhrases.contains(where: { text.contains($0) }) {
+            return false
+        }
+
+        return text.contains { !$0.isNumber && !$0.isWhitespace && $0 != "-" && $0 != "/" && $0 != "." }
+    }
+
+    private static func replacingMatches(in text: String, pattern: String, with replacement: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return text
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: replacement)
     }
 }
 

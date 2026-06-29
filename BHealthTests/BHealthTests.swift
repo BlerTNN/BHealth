@@ -148,4 +148,38 @@ struct BHealthTests {
         #expect(!result.reply.contains("我还没识别出具体食物"))
     }
 
+    @Test func compositeEnergyBowlStaysSingleServingAndDoesNotExplodeCalories() async throws {
+        var session = FoodConversationSession()
+        let result = FoodConversationCoordinator().handle(
+            userText: "午餐 普通饭碗量 盐烤三文鱼紫薯糙米能量碗，含黑椒三文鱼、甜椒、少量鹰嘴豆、少量紫薯泥、鸡蛋，不知道细节，直接估算",
+            mode: .foodLog,
+            session: &session,
+            referenceDate: Date(timeIntervalSince1970: 1_780_000_000)
+        )
+
+        #expect(result.shouldOfferSave)
+        let calculation = try #require(result.calculation)
+        #expect(calculation.items.count == 1)
+        #expect(calculation.foodDisplayName.contains("能量碗"))
+        #expect(calculation.totalEnergyKcal > 200)
+        #expect(calculation.totalEnergyKcal < 1_200)
+    }
+
+    @Test func estimatorIgnoresDateKcalAndConfirmationFragments() async throws {
+        var session = FoodConversationSession()
+        let result = FoodConversationCoordinator().handle(
+            userText: "午餐，2026-06-29，普通饭碗量盐烤三文鱼紫薯糙米能量碗，约424 kcal，请确认是否正确，不知道细节，直接估算",
+            mode: .foodLog,
+            session: &session,
+            referenceDate: Date(timeIntervalSince1970: 1_780_000_000)
+        )
+
+        #expect(result.shouldOfferSave)
+        let calculation = try #require(result.calculation)
+        #expect(calculation.items.count == 1)
+        #expect(!calculation.foodDisplayName.contains("2026"))
+        #expect(!calculation.foodDisplayName.lowercased().contains("kcal"))
+        #expect(calculation.totalEnergyKcal < 1_200)
+    }
+
 }
