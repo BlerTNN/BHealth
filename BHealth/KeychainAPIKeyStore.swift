@@ -80,16 +80,20 @@ enum KeychainError: LocalizedError {
     case notFound
     case unhandled(OSStatus)
 
-    var errorDescription: String? {
+    func message(language: AppLanguage) -> String {
         switch self {
         case .emptyValue:
-            return "API key 不能为空。"
+            return AppText.text("API key 不能为空。", "API key cannot be empty.", language: language)
         case .invalidData:
-            return "API key 数据无法编码。"
+            return AppText.text("API key 数据无法编码。", "API key data could not be encoded.", language: language)
         case .notFound:
-            return "还没有保存 DeepSeek API key。"
+            return AppText.text("还没有保存 DeepSeek API key。", "No DeepSeek API key has been saved.", language: language)
         case .unhandled(let status):
-            return "Keychain 操作失败：\(status)"
+            return AppText.text("Keychain 操作失败：\(status)", "Keychain operation failed: \(status)", language: language)
         }
+    }
+
+    var errorDescription: String? {
+        message(language: .chinese)
     }
 }

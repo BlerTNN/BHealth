@@ -11,6 +11,7 @@ import SwiftData
 @main
 struct BHealthApp: App {
     @StateObject private var healthDashboardStore = HealthDashboardStore()
+    @StateObject private var appSettings = AppSettings()
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
@@ -29,6 +30,8 @@ struct BHealthApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(healthDashboardStore)
+                .environmentObject(appSettings)
+                .environment(\.locale, appSettings.locale)
         }
         .modelContainer(sharedModelContainer)
     }

@@ -99,20 +99,24 @@ enum DeepSeekError: LocalizedError {
     case httpStatus(Int, String)
     case emptyResponse
 
-    var errorDescription: String? {
+    func message(language: AppLanguage) -> String {
         switch self {
         case .invalidURL:
-            return "DeepSeek API 地址无效。"
+            return AppText.text("DeepSeek API 地址无效。", "DeepSeek API URL is invalid.", language: language)
         case .invalidResponse:
-            return "DeepSeek API 返回格式无效。"
+            return AppText.text("DeepSeek API 返回格式无效。", "DeepSeek API returned an invalid response.", language: language)
         case .httpStatus(let status, let body):
             if body.isEmpty {
-                return "DeepSeek API 请求失败：HTTP \(status)。"
+                return AppText.text("DeepSeek API 请求失败：HTTP \(status)。", "DeepSeek API request failed: HTTP \(status).", language: language)
             }
-            return "DeepSeek API 请求失败：HTTP \(status)。\(body)"
+            return AppText.text("DeepSeek API 请求失败：HTTP \(status)。\(body)", "DeepSeek API request failed: HTTP \(status). \(body)", language: language)
         case .emptyResponse:
-            return "DeepSeek API 没有返回内容。"
+            return AppText.text("DeepSeek API 没有返回内容。", "DeepSeek API returned no content.", language: language)
         }
+    }
+
+    var errorDescription: String? {
+        message(language: .chinese)
     }
 }
 

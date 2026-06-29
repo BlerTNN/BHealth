@@ -12,25 +12,26 @@ import UIKit
 #endif
 
 struct ContentView: View {
+    @EnvironmentObject private var appSettings: AppSettings
     @State private var selectedTab = HealthTab.overview
 
     var body: some View {
         TabView(selection: $selectedTab) {
             OverviewView()
                 .tabItem {
-                    Label("总览", systemImage: "heart.text.square.fill")
+                    Label(appSettings.text("总览", "Overview"), systemImage: "heart.text.square.fill")
                 }
                 .tag(HealthTab.overview)
 
             AssistantView()
                 .tabItem {
-                    Label("AI 助手", systemImage: "sparkles")
+                    Label(appSettings.text("AI 助手", "AI Assistant"), systemImage: "sparkles")
                 }
                 .tag(HealthTab.assistant)
 
             ProfileView()
                 .tabItem {
-                    Label("我的", systemImage: "person.crop.circle.fill")
+                    Label(appSettings.text("我的", "Me"), systemImage: "person.crop.circle.fill")
                 }
                 .tag(HealthTab.profile)
         }
@@ -46,6 +47,7 @@ private enum HealthTab {
 
 private struct OverviewView: View {
     @EnvironmentObject private var healthStore: HealthDashboardStore
+    @EnvironmentObject private var appSettings: AppSettings
 
     private var today: DailyHealthOverview {
         healthStore.today
@@ -83,7 +85,7 @@ private struct OverviewView: View {
 
                     HStack(spacing: 12) {
                         MetricCard(
-                            title: "基础代谢",
+                            title: appSettings.text("基础代谢", "Basal burn"),
                             value: "\(basalBurn)",
                             unit: "kcal",
                             systemImage: "person.fill.checkmark",
@@ -91,7 +93,7 @@ private struct OverviewView: View {
                         )
 
                         MetricCard(
-                            title: "健身消耗",
+                            title: appSettings.text("健身消耗", "Active burn"),
                             value: "\(activeBurn)",
                             unit: "kcal",
                             systemImage: "figure.run",
@@ -109,7 +111,7 @@ private struct OverviewView: View {
                 .padding(.vertical, 18)
             }
             .background(AppColor.screenBackground.ignoresSafeArea())
-            .navigationTitle("今日总览")
+            .navigationTitle(appSettings.text("今日总览", "Today"))
             .task {
                 await healthStore.refreshHealthDataIfPossible()
             }
@@ -118,6 +120,7 @@ private struct OverviewView: View {
 }
 
 private struct CalorieSummaryCard: View {
+    @EnvironmentObject private var appSettings: AppSettings
     let calorieBalance: Int
 
     private var isOverBudget: Bool {
@@ -129,11 +132,11 @@ private struct CalorieSummaryCard: View {
     }
 
     private var statusTitle: String {
-        isOverBudget ? "今日已超出" : "今日余量"
+        isOverBudget ? appSettings.text("今日已超出", "Over today") : appSettings.text("今日余量", "Remaining today")
     }
 
     private var statusSubtitle: String {
-        isOverBudget ? "摄入已高于今日消耗" : "目标是让摄入低于消耗"
+        isOverBudget ? appSettings.text("摄入已高于今日消耗", "Intake is above today's burn") : appSettings.text("目标是让摄入低于消耗", "Aim to keep intake below burn")
     }
 
     private var displayedBalance: Int {
@@ -215,16 +218,20 @@ private struct MetricCard: View {
 }
 
 private struct WeeklyTrendChartCard: View {
+    @EnvironmentObject private var appSettings: AppSettings
     let entries: [CalorieEntry]
 
     var body: some View {
+        let intakeLabel = appSettings.text("摄入", "Intake")
+        let burnLabel = appSettings.text("消耗", "Burn")
+
         VStack(alignment: .leading, spacing: 18) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("近 7 天趋势")
+                    Text(appSettings.text("近 7 天趋势", "Last 7 Days"))
                         .font(.headline.weight(.semibold))
 
-                    Text("每日摄入与消耗对比")
+                    Text(appSettings.text("每日摄入与消耗对比", "Daily intake vs burn"))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -234,7 +241,7 @@ private struct WeeklyTrendChartCard: View {
                 NavigationLink {
                     YearCalendarView()
                 } label: {
-                    Label("年历", systemImage: "calendar")
+                    Label(appSettings.text("年历", "Year"), systemImage: "calendar")
                         .font(.subheadline.weight(.bold))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 9)
@@ -245,24 +252,24 @@ private struct WeeklyTrendChartCard: View {
 
             Chart(entries) { entry in
                 BarMark(
-                    x: .value("日期", entry.date, unit: .day),
-                    y: .value("卡路里", entry.intake)
+                    x: .value(appSettings.text("日期", "Date"), entry.date, unit: .day),
+                    y: .value(appSettings.text("卡路里", "Calories"), entry.intake)
                 )
-                .foregroundStyle(by: .value("类型", "摄入"))
-                .position(by: .value("类型", "摄入"))
+                .foregroundStyle(by: .value(appSettings.text("类型", "Type"), intakeLabel))
+                .position(by: .value(appSettings.text("类型", "Type"), intakeLabel))
                 .cornerRadius(6)
 
                 BarMark(
-                    x: .value("日期", entry.date, unit: .day),
-                    y: .value("卡路里", entry.burn)
+                    x: .value(appSettings.text("日期", "Date"), entry.date, unit: .day),
+                    y: .value(appSettings.text("卡路里", "Calories"), entry.burn)
                 )
-                .foregroundStyle(by: .value("类型", "消耗"))
-                .position(by: .value("类型", "消耗"))
+                .foregroundStyle(by: .value(appSettings.text("类型", "Type"), burnLabel))
+                .position(by: .value(appSettings.text("类型", "Type"), burnLabel))
                 .cornerRadius(6)
             }
             .chartForegroundStyleScale([
-                "摄入": AppColor.healthGreen,
-                "消耗": AppColor.energyOrange
+                intakeLabel: AppColor.healthGreen,
+                burnLabel: AppColor.energyOrange
             ])
             .chartLegend(position: .bottom, alignment: .leading)
             .chartYAxis {
@@ -282,6 +289,7 @@ private struct WeeklyTrendChartCard: View {
 
 private struct YearCalendarView: View {
     @EnvironmentObject private var healthStore: HealthDashboardStore
+    @EnvironmentObject private var appSettings: AppSettings
     @State private var monthGroups: [YearMonthGroup] = []
     @State private var selectedDate: Date?
 
@@ -300,7 +308,7 @@ private struct YearCalendarView: View {
             .padding(.vertical, 18)
         }
         .background(AppColor.screenBackground.ignoresSafeArea())
-        .navigationTitle("近一年日历")
+        .navigationTitle(appSettings.text("近一年日历", "Year Calendar"))
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: Binding(
             get: { selectedDate != nil },
@@ -328,6 +336,7 @@ private struct YearCalendarView: View {
 }
 
 private struct YearCalendarSummaryCard: View {
+    @EnvironmentObject private var appSettings: AppSettings
     let summaries: [DailyHealthOverview]
 
     private var recordedDays: Int {
@@ -347,10 +356,10 @@ private struct YearCalendarSummaryCard: View {
                 .background(AppColor.healthGreen.gradient, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
             VStack(alignment: .leading, spacing: 5) {
-                Text("每日余量记录")
+                Text(appSettings.text("每日余量记录", "Daily Balance"))
                     .font(.headline.weight(.semibold))
 
-                Text("已记录 \(recordedDays) 天，超出 \(overBudgetDays) 天")
+                Text(appSettings.text("已记录 \(recordedDays) 天，超出 \(overBudgetDays) 天", "\(recordedDays) days recorded, \(overBudgetDays) over budget"))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -409,11 +418,16 @@ private enum YearCalendarDataBuilder {
 }
 
 private struct CalendarMonthSection: View {
+    @EnvironmentObject private var appSettings: AppSettings
     let group: YearMonthGroup
     let selectDate: (Date) -> Void
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
-    private let weekdaySymbols = ["日", "一", "二", "三", "四", "五", "六"]
+    private var weekdaySymbols: [String] {
+        appSettings.resolvedLanguage == .chinese
+            ? ["日", "一", "二", "三", "四", "五", "六"]
+            : ["S", "M", "T", "W", "T", "F", "S"]
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -447,7 +461,7 @@ private struct CalendarMonthSection: View {
     }
 
     private var monthTitle: String {
-        group.monthStart.formatted(.dateTime.year().month(.wide))
+        group.monthStart.formatted(.dateTime.locale(appSettings.locale).year().month(.wide))
     }
 }
 
@@ -496,6 +510,7 @@ private struct DayBalanceCell: View {
 
 private struct DailyCalendarDetailView: View {
     @EnvironmentObject private var healthStore: HealthDashboardStore
+    @EnvironmentObject private var appSettings: AppSettings
     let date: Date
 
     private var summary: DailyHealthOverview {
@@ -516,11 +531,11 @@ private struct DailyCalendarDetailView: View {
                 DailyBalanceHeaderCard(summary: summary)
 
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                    DetailMetricCard(title: "摄入", value: summary.intakeKcal, unit: "kcal", icon: "fork.knife", tint: AppColor.healthGreen)
-                    DetailMetricCard(title: "总消耗", value: summary.totalBurnKcal, unit: "kcal", icon: "flame.fill", tint: AppColor.energyOrange)
-                    DetailMetricCard(title: "健身消耗", value: summary.activeEnergyKcal, unit: "kcal", icon: "figure.run", tint: AppColor.skyBlue)
+                    DetailMetricCard(title: appSettings.text("摄入", "Intake"), value: summary.intakeKcal, unit: "kcal", icon: "fork.knife", tint: AppColor.healthGreen)
+                    DetailMetricCard(title: appSettings.text("总消耗", "Total burn"), value: summary.totalBurnKcal, unit: "kcal", icon: "flame.fill", tint: AppColor.energyOrange)
+                    DetailMetricCard(title: appSettings.text("健身消耗", "Active burn"), value: summary.activeEnergyKcal, unit: "kcal", icon: "figure.run", tint: AppColor.skyBlue)
                     DetailMetricCard(
-                        title: "基础代谢",
+                        title: appSettings.text("基础代谢", "Basal burn"),
                         value: summary.basalEnergyKcal,
                         unit: "kcal",
                         icon: "person.fill.checkmark",
@@ -528,14 +543,14 @@ private struct DailyCalendarDetailView: View {
                     )
                 }
 
-                DetailMetricCard(title: "步数", value: summary.stepCount, unit: "步", icon: "figure.walk", tint: AppColor.healthGreen)
+                DetailMetricCard(title: appSettings.text("步数", "Steps"), value: summary.stepCount, unit: appSettings.text("步", "steps"), icon: "figure.walk", tint: AppColor.healthGreen)
 
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("当日饮食")
+                    Text(appSettings.text("当日饮食", "Meals"))
                         .font(.headline.weight(.semibold))
 
                     if records.isEmpty {
-                        Text("暂无饮食记录")
+                        Text(appSettings.text("暂无饮食记录", "No meal records"))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -553,12 +568,13 @@ private struct DailyCalendarDetailView: View {
             .padding(.vertical, 18)
         }
         .background(AppColor.screenBackground.ignoresSafeArea())
-        .navigationTitle(date.formatted(.dateTime.month().day().weekday(.wide)))
+        .navigationTitle(AppText.monthDayWeekday(date, language: appSettings.resolvedLanguage))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
 
 private struct DailyBalanceHeaderCard: View {
+    @EnvironmentObject private var appSettings: AppSettings
     let summary: DailyHealthOverview
 
     private var isOverBudget: Bool {
@@ -578,7 +594,7 @@ private struct DailyBalanceHeaderCard: View {
                 .background(tint.gradient, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
             VStack(alignment: .leading, spacing: 5) {
-                Text(isOverBudget ? "当日超出" : "当日余量")
+                Text(isOverBudget ? appSettings.text("当日超出", "Over Budget") : appSettings.text("当日余量", "Remaining"))
                     .font(.headline.weight(.semibold))
 
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
@@ -638,11 +654,12 @@ private struct DetailMetricCard: View {
 }
 
 private struct InsightCard: View {
+    @EnvironmentObject private var appSettings: AppSettings
     let summary: DailyHealthOverview
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label("今日建议", systemImage: "lightbulb.max.fill")
+            Label(appSettings.text("今日建议", "Today's Suggestion"), systemImage: "lightbulb.max.fill")
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.primary)
 
@@ -657,23 +674,24 @@ private struct InsightCard: View {
 
     private var message: String {
         if summary.intakeKcal == 0 {
-            return "今天还没有确认保存的饮食记录。你可以到 AI 助手页用自然语言记录一餐，总览会自动更新摄入热量。"
+            return appSettings.text("今天还没有确认保存的饮食记录。你可以到 AI 助手页用自然语言记录一餐，总览会自动更新摄入热量。", "No confirmed meals yet today. Record a meal in the AI Assistant and the overview will update automatically.")
         }
 
         if summary.balanceKcal >= 250 {
-            return "今天热量仍有约 \(Int(summary.balanceKcal.rounded())) kcal 余量。晚餐可以优先选择高蛋白、低油脂食物，并保持轻量活动。"
+            return appSettings.text("今天热量仍有约 \(Int(summary.balanceKcal.rounded())) kcal 余量。晚餐可以优先选择高蛋白、低油脂食物，并保持轻量活动。", "You still have about \(Int(summary.balanceKcal.rounded())) kcal remaining today. For dinner, prioritize high-protein, lower-fat foods and keep some light activity.")
         }
 
         if summary.balanceKcal >= 0 {
-            return "今天摄入和消耗比较接近。后续记录尽量补充克重或份量，热量估算会更可靠。"
+            return appSettings.text("今天摄入和消耗比较接近。后续记录尽量补充克重或份量，热量估算会更可靠。", "Your intake and burn are close today. Adding weights or portions to future records will make estimates more reliable.")
         }
 
-        return "今天摄入已高于消耗约 \(abs(Int(summary.balanceKcal.rounded()))) kcal。可以选择散步或拉伸，不建议用高强度运动强行抵消。"
+        return appSettings.text("今天摄入已高于消耗约 \(abs(Int(summary.balanceKcal.rounded()))) kcal。可以选择散步或拉伸，不建议用高强度运动强行抵消。", "Your intake is about \(abs(Int(summary.balanceKcal.rounded()))) kcal above burn today. A walk or stretching is fine; avoid trying to forcefully offset it with intense exercise.")
     }
 }
 
 private struct MealHistorySection: View {
     @EnvironmentObject private var healthStore: HealthDashboardStore
+    @EnvironmentObject private var appSettings: AppSettings
     @State private var showsHistory = false
 
     let records: [SavedMealRecord]
@@ -682,10 +700,10 @@ private struct MealHistorySection: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("历史饮食记录")
+                    Text(appSettings.text("历史饮食记录", "Meal History"))
                         .font(.headline.weight(.semibold))
 
-                    Text(records.isEmpty ? "暂无已确认记录" : "共 \(records.count) 条，可查看和修改")
+                    Text(records.isEmpty ? appSettings.text("暂无已确认记录", "No confirmed records yet") : appSettings.text("共 \(records.count) 条，可查看和修改", "\(records.count) records, editable"))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -710,7 +728,7 @@ private struct MealHistorySection: View {
                 Button {
                     showsHistory = true
                 } label: {
-                    Text("查看全部记录")
+                    Text(appSettings.text("查看全部记录", "View All Records"))
                         .font(.subheadline.weight(.bold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -728,6 +746,7 @@ private struct MealHistorySection: View {
 }
 
 private struct MealRecordRow: View {
+    @EnvironmentObject private var appSettings: AppSettings
     let record: SavedMealRecord
 
     var body: some View {
@@ -743,7 +762,7 @@ private struct MealRecordRow: View {
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
 
-                Text("\(record.consumedAt.formatted(date: .abbreviated, time: .omitted)) · \(record.mealType.title)")
+                Text("\(AppText.shortDate(record.consumedAt, language: appSettings.resolvedLanguage)) · \(record.mealType.title(language: appSettings.resolvedLanguage))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -766,6 +785,7 @@ private struct MealRecordRow: View {
 private struct MealHistoryListView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var healthStore: HealthDashboardStore
+    @EnvironmentObject private var appSettings: AppSettings
     @State private var selectedDate = Calendar.current.startOfDay(for: Date())
     @State private var didSetInitialDate = false
     @State private var editingRecord: SavedMealRecord?
@@ -785,15 +805,15 @@ private struct MealHistoryListView: View {
         NavigationStack {
             List {
                 if healthStore.savedMealRecords.isEmpty {
-                    ContentUnavailableView("暂无记录", systemImage: "fork.knife", description: Text("在 AI 助手中确认保存后会出现在这里。"))
+                    ContentUnavailableView(appSettings.text("暂无记录", "No Records"), systemImage: "fork.knife", description: Text(appSettings.text("在 AI 助手中确认保存后会出现在这里。", "Confirmed meals from the AI Assistant will appear here.")))
                 } else {
                     Section {
-                        DatePicker("日期", selection: $selectedDate, displayedComponents: .date)
+                        DatePicker(appSettings.text("日期", "Date"), selection: $selectedDate, displayedComponents: .date)
                             .datePickerStyle(.compact)
                             .tint(AppColor.healthGreen)
 
                         HStack {
-                            Label("\(selectedRecords.count) 条记录", systemImage: "calendar")
+                            Label(appSettings.text("\(selectedRecords.count) 条记录", "\(selectedRecords.count) records"), systemImage: "calendar")
                                 .font(.subheadline.weight(.semibold))
 
                             Spacer()
@@ -807,12 +827,12 @@ private struct MealHistoryListView: View {
 
                     if selectedRecords.isEmpty {
                         ContentUnavailableView(
-                            "当天暂无记录",
+                            appSettings.text("当天暂无记录", "No Records That Day"),
                             systemImage: "calendar.badge.exclamationmark",
-                            description: Text("请选择其他日期，或在 AI 助手中补录这一天的饮食。")
+                            description: Text(appSettings.text("请选择其他日期，或在 AI 助手中补录这一天的饮食。", "Choose another date, or add meals for this day in the AI Assistant."))
                         )
                     } else {
-                        Section("当日记录") {
+                        Section(appSettings.text("当日记录", "Records")) {
                             ForEach(selectedRecords) { record in
                                 Button {
                                     editingRecord = record
@@ -824,7 +844,7 @@ private struct MealHistoryListView: View {
                                     Button(role: .destructive) {
                                         healthStore.deleteMealRecord(record)
                                     } label: {
-                                        Label("删除", systemImage: "trash")
+                                        Label(appSettings.text("删除", "Delete"), systemImage: "trash")
                                     }
                                 }
                             }
@@ -832,10 +852,10 @@ private struct MealHistoryListView: View {
                     }
                 }
             }
-            .navigationTitle("历史记录")
+            .navigationTitle(appSettings.text("历史记录", "History"))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("完成") {
+                    Button(appSettings.text("完成", "Done")) {
                         dismiss()
                     }
                 }
@@ -864,6 +884,7 @@ private struct MealHistoryListView: View {
 
 private struct MealRecordEditorView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var appSettings: AppSettings
     @State private var foodName: String
     @State private var kcal: String
     @State private var consumedAt: Date
@@ -893,11 +914,11 @@ private struct MealRecordEditorView: View {
                 VStack(spacing: 16) {
                     VStack(spacing: 16) {
                         EditorTextRow(
-                            title: "食品",
-                            subtitle: "已保存的具体食物",
+                            title: appSettings.text("食品", "Food"),
+                            subtitle: appSettings.text("已保存的具体食物", "Saved food item"),
                             icon: "fork.knife",
                             tint: AppColor.healthGreen,
-                            placeholder: "例如 鸡蛋、拿铁、吐司",
+                            placeholder: appSettings.text("例如 鸡蛋、拿铁、吐司", "e.g. Eggs, latte, toast"),
                             text: $foodName,
                             keyboard: .text
                         )
@@ -905,8 +926,8 @@ private struct MealRecordEditorView: View {
                         Divider()
 
                         EditorTextRow(
-                            title: "热量",
-                            subtitle: "当餐估算摄入",
+                            title: appSettings.text("热量", "Calories"),
+                            subtitle: appSettings.text("当餐估算摄入", "Estimated intake for this meal"),
                             icon: "flame.fill",
                             tint: AppColor.energyOrange,
                             placeholder: "kcal",
@@ -922,8 +943,8 @@ private struct MealRecordEditorView: View {
                         Divider()
 
                         EditorDateRow(
-                            title: "日期",
-                            subtitle: "这餐归属的日期",
+                            title: appSettings.text("日期", "Date"),
+                            subtitle: appSettings.text("这餐归属的日期", "Date for this meal"),
                             icon: "calendar",
                             tint: AppColor.skyBlue,
                             date: $consumedAt
@@ -935,7 +956,7 @@ private struct MealRecordEditorView: View {
                         deleteAction()
                         dismiss()
                     } label: {
-                        Label("删除记录", systemImage: "trash")
+                        Label(appSettings.text("删除记录", "Delete Record"), systemImage: "trash")
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
@@ -946,16 +967,16 @@ private struct MealRecordEditorView: View {
                 .padding(.vertical, 18)
             }
             .background(AppColor.screenBackground.ignoresSafeArea())
-            .navigationTitle("编辑记录")
+            .navigationTitle(appSettings.text("编辑记录", "Edit Record"))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") {
+                    Button(appSettings.text("取消", "Cancel")) {
                         dismiss()
                     }
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
+                    Button(appSettings.text("保存", "Save")) {
                         saveAction(updatedRecord)
                         dismiss()
                     }
@@ -979,9 +1000,9 @@ private struct MealRecordEditorView: View {
             fatG: nil,
             carbohydrateG: nil,
             confidence: record.calculation.confidence,
-            sourceName: "用户编辑",
+            sourceName: appSettings.text("用户编辑", "User edit"),
             sourceVersion: "manual",
-            assumptions: ["用户手动编辑历史记录。"]
+            assumptions: [appSettings.text("用户手动编辑历史记录。", "Record edited manually.")]
         )
         let calculation = MealCalculationResult(
             id: record.calculation.id,
@@ -991,8 +1012,8 @@ private struct MealRecordEditorView: View {
             rangeLowKcal: energy,
             rangeHighKcal: energy,
             confidence: record.calculation.confidence,
-            assumptions: ["用户手动编辑历史记录。"],
-            sourceSummary: "用户编辑"
+            assumptions: [appSettings.text("用户手动编辑历史记录。", "Record edited manually.")],
+            sourceSummary: appSettings.text("用户编辑", "User edit")
         )
 
         return SavedMealRecord(
@@ -1007,6 +1028,7 @@ private struct MealRecordEditorView: View {
 
 private struct AssistantView: View {
     @EnvironmentObject private var healthStore: HealthDashboardStore
+    @EnvironmentObject private var appSettings: AppSettings
     @StateObject private var viewModel = FoodAssistantViewModel()
     @State private var navigationPath: [AssistantMode] = []
     @FocusState private var isInputFocused: Bool
@@ -1014,16 +1036,16 @@ private struct AssistantView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             AssistantModeSelectionView { mode in
-                viewModel.openMode(mode)
+                viewModel.openMode(mode, language: appSettings.resolvedLanguage)
                 navigationPath.append(mode)
             }
             .background(AppColor.screenBackground.ignoresSafeArea())
-            .navigationTitle("AI 助手")
+            .navigationTitle(appSettings.text("AI 助手", "AI Assistant"))
             .navigationDestination(for: AssistantMode.self) { mode in
                 assistantChat(mode: mode)
                     .onAppear {
                         if viewModel.selectedMode != mode {
-                            viewModel.openMode(mode)
+                            viewModel.openMode(mode, language: appSettings.resolvedLanguage)
                         }
                     }
             }
@@ -1033,8 +1055,16 @@ private struct AssistantView: View {
                     viewModel.closeMode()
                 }
             }
+            .onChange(of: appSettings.resolvedLanguage) { _, language in
+                if let selectedMode = viewModel.selectedMode {
+                    viewModel.openMode(selectedMode, language: language)
+                } else {
+                    viewModel.closeMode(language: language)
+                }
+            }
             .onAppear {
                 viewModel.refreshAPIKeyStatus()
+                viewModel.setLanguage(appSettings.resolvedLanguage)
             }
         }
     }
@@ -1099,7 +1129,7 @@ private struct AssistantView: View {
                 sendAction: {
                     isInputFocused = false
                     Task {
-                        await viewModel.sendDraftMessage(dashboardContext: healthStore.assistantContextSummary)
+                        await viewModel.sendDraftMessage(dashboardContext: healthStore.assistantContextSummary(language: appSettings.resolvedLanguage))
                     }
                 }
             )
@@ -1107,17 +1137,18 @@ private struct AssistantView: View {
             .padding(.vertical, 12)
             .background(.regularMaterial)
         }
-        .navigationTitle(mode.title)
+        .navigationTitle(mode.title(language: appSettings.resolvedLanguage))
     }
 }
 
 private struct AssistantModeSelectionView: View {
+    @EnvironmentObject private var appSettings: AppSettings
     let selectMode: (AssistantMode) -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("选择助手")
+                Text(appSettings.text("选择助手", "Choose Assistant"))
                     .font(.largeTitle.weight(.bold))
                     .padding(.top, 8)
 
@@ -1133,11 +1164,11 @@ private struct AssistantModeSelectionView: View {
                                 .background(AppColor.healthGreen.opacity(0.14), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(mode.title)
+                                Text(mode.title(language: appSettings.resolvedLanguage))
                                     .font(.headline.weight(.semibold))
                                     .foregroundStyle(.primary)
 
-                                Text(mode.subtitle)
+                                Text(mode.subtitle(language: appSettings.resolvedLanguage))
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
@@ -1161,6 +1192,7 @@ private struct AssistantModeSelectionView: View {
 }
 
 private struct APIKeySetupCard: View {
+    @EnvironmentObject private var appSettings: AppSettings
     @Binding var apiKeyInput: String
     let hasAPIKey: Bool
     let statusMessage: String?
@@ -1177,10 +1209,10 @@ private struct APIKeySetupCard: View {
                     .background(AppColor.healthGreen.opacity(0.14), in: Circle())
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(hasAPIKey ? "DeepSeek 已连接" : "DeepSeek API Key")
+                    Text(hasAPIKey ? appSettings.text("DeepSeek 已连接", "DeepSeek Connected") : "DeepSeek API Key")
                         .font(.headline.weight(.semibold))
 
-                    Text(hasAPIKey ? "密钥保存在系统 Keychain" : "保存后开始真实 AI 对话")
+                    Text(hasAPIKey ? appSettings.text("密钥保存在系统 Keychain", "Key saved in system Keychain") : appSettings.text("保存后开始真实 AI 对话", "Save it to enable real AI conversations"))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -1190,7 +1222,7 @@ private struct APIKeySetupCard: View {
 
             if hasAPIKey {
                 Button(role: .destructive, action: deleteAction) {
-                    Label("删除密钥", systemImage: "trash")
+                    Label(appSettings.text("删除密钥", "Delete Key"), systemImage: "trash")
                         .font(.subheadline.weight(.semibold))
                 }
                 .buttonStyle(.bordered)
@@ -1200,7 +1232,7 @@ private struct APIKeySetupCard: View {
                         .textFieldStyle(.roundedBorder)
 
                     Button(action: saveAction) {
-                        Label("保存", systemImage: "lock.fill")
+                        Label(appSettings.text("保存", "Save"), systemImage: "lock.fill")
                             .font(.subheadline.weight(.bold))
                     }
                     .buttonStyle(.borderedProminent)
@@ -1214,6 +1246,46 @@ private struct APIKeySetupCard: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
+        }
+        .healthCard()
+    }
+}
+
+private struct LanguageSettingsCard: View {
+    @EnvironmentObject private var appSettings: AppSettings
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Image(systemName: "globe")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(AppColor.skyBlue)
+                    .frame(width: 36, height: 36)
+                    .background(AppColor.skyBlue.opacity(0.14), in: Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(appSettings.text("语言", "Language"))
+                        .font(.headline.weight(.semibold))
+
+                    Text(appSettings.text("AI 回复和界面文案会跟随此设置", "AI replies and app text follow this setting"))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            Picker(appSettings.text("语言", "Language"), selection: $appSettings.languagePreference) {
+                ForEach(AppLanguagePreference.allCases) { preference in
+                    Text(preference.title(language: appSettings.resolvedLanguage))
+                        .tag(preference)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text(appSettings.languagePreference.subtitle(language: appSettings.resolvedLanguage))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
         .healthCard()
     }
@@ -1259,6 +1331,8 @@ private struct ChatBubble: View {
 }
 
 private struct LoadingBubble: View {
+    @EnvironmentObject private var appSettings: AppSettings
+
     var body: some View {
         HStack(alignment: .bottom) {
             Image(systemName: "sparkles")
@@ -1271,7 +1345,7 @@ private struct LoadingBubble: View {
                 ProgressView()
                     .controlSize(.small)
 
-                Text("正在分析")
+                Text(appSettings.text("正在分析", "Analyzing"))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
             }
@@ -1285,6 +1359,7 @@ private struct LoadingBubble: View {
 }
 
 private struct MealCalculationDraftCard: View {
+    @EnvironmentObject private var appSettings: AppSettings
     let calculation: MealCalculationResult
     let mealType: MealType?
     let consumedAt: Date?
@@ -1293,7 +1368,7 @@ private struct MealCalculationDraftCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label("待确认记录", systemImage: "doc.badge.clock")
+                Label(appSettings.text("待确认记录", "Pending Record"), systemImage: "doc.badge.clock")
                     .font(.headline.weight(.semibold))
 
                 Spacer()
@@ -1315,7 +1390,7 @@ private struct MealCalculationDraftCard: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
 
-                Text("较可能范围 \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded()))")
+                Text(appSettings.text("较可能范围 \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded()))", "Likely range \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded()))"))
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(.secondary)
                     .padding(.leading, 4)
@@ -1323,11 +1398,11 @@ private struct MealCalculationDraftCard: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 if let consumedAt {
-                    Label("日期：\(consumedAt.formatted(date: .abbreviated, time: .omitted))", systemImage: "calendar")
+                    Label(appSettings.text("日期：\(AppText.shortDate(consumedAt, language: appSettings.resolvedLanguage))", "Date: \(AppText.shortDate(consumedAt, language: appSettings.resolvedLanguage))"), systemImage: "calendar")
                 }
 
                 if let mealType {
-                    Label("餐别：\(mealType.title)", systemImage: "sparkles")
+                    Label(appSettings.text("餐别：\(mealType.title(language: appSettings.resolvedLanguage))", "Meal: \(mealType.title(language: appSettings.resolvedLanguage))"), systemImage: "sparkles")
                 }
             }
             .font(.footnote.weight(.semibold))
@@ -1341,7 +1416,7 @@ private struct MealCalculationDraftCard: View {
                             .foregroundStyle(AppColor.healthGreen)
                             .padding(.top, 7)
 
-                        Text("\(item.displayFoodName)：约 \(Int(item.energyKcal.rounded())) kcal")
+                        Text(appSettings.text("\(item.displayFoodName)：约 \(Int(item.energyKcal.rounded())) kcal", "\(item.displayFoodName): about \(Int(item.energyKcal.rounded())) kcal"))
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
@@ -1351,7 +1426,7 @@ private struct MealCalculationDraftCard: View {
 
             if !calculation.assumptions.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("估算依据")
+                    Text(appSettings.text("估算依据", "Estimate Basis"))
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
 
@@ -1365,7 +1440,7 @@ private struct MealCalculationDraftCard: View {
             }
 
             Button(action: saveAction) {
-                Label("确认记录", systemImage: "checkmark.circle.fill")
+                Label(appSettings.text("确认记录", "Confirm Record"), systemImage: "checkmark.circle.fill")
                     .font(.subheadline.weight(.bold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
@@ -1377,7 +1452,7 @@ private struct MealCalculationDraftCard: View {
     }
 
     private var confidenceText: String {
-        calculation.confidence == "low" ? "低可信度" : "中等可信度"
+        calculation.confidence == "low" ? appSettings.text("低可信度", "Low confidence") : appSettings.text("中等可信度", "Medium confidence")
     }
 
     private var confidenceColor: Color {
@@ -1386,6 +1461,7 @@ private struct MealCalculationDraftCard: View {
 }
 
 private struct ChatInputBar: View {
+    @EnvironmentObject private var appSettings: AppSettings
     @Binding var text: String
     let isSending: Bool
     var isFocused: FocusState<Bool>.Binding
@@ -1393,7 +1469,7 @@ private struct ChatInputBar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            TextField("输入饮食、运动或健康问题", text: $text, axis: .vertical)
+            TextField(appSettings.text("输入饮食、运动或健康问题", "Enter food, exercise, or health questions"), text: $text, axis: .vertical)
                 .focused(isFocused)
                 .lineLimit(1...4)
                 .padding(.horizontal, 14)
@@ -1428,6 +1504,7 @@ private struct ChatInputBar: View {
 
 private struct ProfileView: View {
     @EnvironmentObject private var healthStore: HealthDashboardStore
+    @EnvironmentObject private var appSettings: AppSettings
     @State private var isEditingProfile = false
     @State private var apiKeyInput = ""
     @State private var hasAPIKey = KeychainAPIKeyStore.shared.hasAPIKey
@@ -1440,10 +1517,10 @@ private struct ProfileView: View {
                     profileHeader
 
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                        ProfileMetricCard(title: "身高", value: formatNumber(healthStore.profile.heightCm), unit: "cm", icon: "ruler", tint: AppColor.skyBlue)
-                        ProfileMetricCard(title: "体重", value: formatNumber(healthStore.profile.weightKg), unit: "kg", icon: "scalemass.fill", tint: AppColor.healthGreen)
-                        ProfileMetricCard(title: "年龄", value: formatInteger(healthStore.profile.age), unit: "岁", icon: "calendar", tint: AppColor.energyOrange)
-                        ProfileMetricCard(title: "目标体重", value: formatNumber(healthStore.profile.targetWeightKg), unit: "kg", icon: "target", tint: AppColor.violet)
+                        ProfileMetricCard(title: appSettings.text("身高", "Height"), value: formatNumber(healthStore.profile.heightCm), unit: "cm", icon: "ruler", tint: AppColor.skyBlue)
+                        ProfileMetricCard(title: appSettings.text("体重", "Weight"), value: formatNumber(healthStore.profile.weightKg), unit: "kg", icon: "scalemass.fill", tint: AppColor.healthGreen)
+                        ProfileMetricCard(title: appSettings.text("年龄", "Age"), value: formatInteger(healthStore.profile.age), unit: appSettings.text("岁", "yr"), icon: "calendar", tint: AppColor.energyOrange)
+                        ProfileMetricCard(title: appSettings.text("目标体重", "Goal Weight"), value: formatNumber(healthStore.profile.targetWeightKg), unit: "kg", icon: "target", tint: AppColor.violet)
                     }
 
                     APIKeySetupCard(
@@ -1454,13 +1531,15 @@ private struct ProfileView: View {
                         deleteAction: deleteAPIKey
                     )
 
+                    LanguageSettingsCard()
+
                     syncCard
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 18)
             }
             .background(AppColor.screenBackground.ignoresSafeArea())
-            .navigationTitle("我的")
+            .navigationTitle(appSettings.text("我的", "Me"))
             .onAppear {
                 hasAPIKey = KeychainAPIKeyStore.shared.hasAPIKey
             }
@@ -1469,7 +1548,7 @@ private struct ProfileView: View {
                     Button {
                         isEditingProfile = true
                     } label: {
-                        Label("编辑", systemImage: "square.and.pencil")
+                        Label(appSettings.text("编辑", "Edit"), systemImage: "square.and.pencil")
                     }
                 }
             }
@@ -1522,7 +1601,7 @@ private struct ProfileView: View {
                     Text("Apple Health / Fitness")
                         .font(.headline.weight(.semibold))
 
-                    Text(healthStore.healthKitStatusMessage)
+                    Text(healthStore.healthKitStatusMessage(language: appSettings.resolvedLanguage))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -1534,7 +1613,7 @@ private struct ProfileView: View {
                     await healthStore.requestHealthAuthorizationAndRefresh()
                 }
             } label: {
-                Label(healthStore.isSyncingHealthKit ? "同步中" : "同步健康与健身数据", systemImage: "arrow.triangle.2.circlepath")
+                Label(healthStore.isSyncingHealthKit ? appSettings.text("同步中", "Syncing") : appSettings.text("同步健康与健身数据", "Sync Health & Fitness Data"), systemImage: "arrow.triangle.2.circlepath")
                     .font(.subheadline.weight(.bold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
@@ -1548,9 +1627,9 @@ private struct ProfileView: View {
 
     private var profileSubtitle: String {
         if let syncedAt = healthStore.profile.lastSyncedAt {
-            return "上次同步：\(syncedAt.formatted(date: .abbreviated, time: .shortened))"
+            return appSettings.text("上次同步：\(AppText.shortDateTime(syncedAt, language: appSettings.resolvedLanguage))", "Last synced: \(AppText.shortDateTime(syncedAt, language: appSettings.resolvedLanguage))")
         }
-        return "目标：稳步控制热量，建立长期健康记录"
+        return appSettings.text("目标：稳步控制热量，建立长期健康记录", "Goal: manage calories steadily and build a long-term health record")
     }
 
     private func formatNumber(_ value: Double?) -> String {
@@ -1571,9 +1650,10 @@ private struct ProfileView: View {
             try KeychainAPIKeyStore.shared.saveAPIKey(apiKeyInput)
             apiKeyInput = ""
             hasAPIKey = true
-            apiKeyStatusMessage = "DeepSeek API key 已保存到系统 Keychain。"
+            apiKeyStatusMessage = appSettings.text("DeepSeek API key 已保存到系统 Keychain。", "DeepSeek API key saved to system Keychain.")
         } catch {
-            apiKeyStatusMessage = error.localizedDescription
+            let reason = (error as? KeychainError)?.message(language: appSettings.resolvedLanguage) ?? error.localizedDescription
+            apiKeyStatusMessage = appSettings.text("保存 API key 失败：\(reason)", "Failed to save API key: \(reason)")
         }
     }
 
@@ -1581,9 +1661,10 @@ private struct ProfileView: View {
         do {
             try KeychainAPIKeyStore.shared.deleteAPIKey()
             hasAPIKey = false
-            apiKeyStatusMessage = "已从 Keychain 删除 DeepSeek API key。"
+            apiKeyStatusMessage = appSettings.text("已从 Keychain 删除 DeepSeek API key。", "DeepSeek API key deleted from Keychain.")
         } catch {
-            apiKeyStatusMessage = error.localizedDescription
+            let reason = (error as? KeychainError)?.message(language: appSettings.resolvedLanguage) ?? error.localizedDescription
+            apiKeyStatusMessage = appSettings.text("删除 API key 失败：\(reason)", "Failed to delete API key: \(reason)")
         }
     }
 }
@@ -1628,6 +1709,7 @@ private struct ProfileMetricCard: View {
 
 private struct ProfileEditorView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var appSettings: AppSettings
     @State private var name: String
     @State private var height: String
     @State private var weight: String
@@ -1653,11 +1735,11 @@ private struct ProfileEditorView: View {
                 VStack(spacing: 16) {
                     VStack(spacing: 16) {
                         EditorTextRow(
-                            title: "姓名",
-                            subtitle: "个人资料显示名称",
+                            title: appSettings.text("姓名", "Name"),
+                            subtitle: appSettings.text("个人资料显示名称", "Profile display name"),
                             icon: "person.fill",
                             tint: AppColor.healthGreen,
-                            placeholder: "姓名",
+                            placeholder: appSettings.text("姓名", "Name"),
                             text: $name,
                             keyboard: .text
                         )
@@ -1665,8 +1747,8 @@ private struct ProfileEditorView: View {
                         Divider()
 
                         EditorTextRow(
-                            title: "身高",
-                            subtitle: "用于估算基础代谢",
+                            title: appSettings.text("身高", "Height"),
+                            subtitle: appSettings.text("用于估算基础代谢", "Used to estimate basal burn"),
                             icon: "ruler",
                             tint: AppColor.skyBlue,
                             placeholder: "cm",
@@ -1678,8 +1760,8 @@ private struct ProfileEditorView: View {
                         Divider()
 
                         EditorTextRow(
-                            title: "体重",
-                            subtitle: "当前体重",
+                            title: appSettings.text("体重", "Weight"),
+                            subtitle: appSettings.text("当前体重", "Current weight"),
                             icon: "scalemass.fill",
                             tint: AppColor.healthGreen,
                             placeholder: "kg",
@@ -1691,21 +1773,21 @@ private struct ProfileEditorView: View {
                         Divider()
 
                         EditorTextRow(
-                            title: "年龄",
-                            subtitle: "用于健康估算",
+                            title: appSettings.text("年龄", "Age"),
+                            subtitle: appSettings.text("用于健康估算", "Used for health estimates"),
                             icon: "calendar",
                             tint: AppColor.energyOrange,
-                            placeholder: "岁",
+                            placeholder: appSettings.text("岁", "yr"),
                             text: $age,
                             keyboard: .number,
-                            unit: "岁"
+                            unit: appSettings.text("岁", "yr")
                         )
 
                         Divider()
 
                         EditorTextRow(
-                            title: "目标体重",
-                            subtitle: "长期目标",
+                            title: appSettings.text("目标体重", "Goal Weight"),
+                            subtitle: appSettings.text("长期目标", "Long-term target"),
                             icon: "target",
                             tint: AppColor.violet,
                             placeholder: "kg",
@@ -1724,16 +1806,16 @@ private struct ProfileEditorView: View {
                 .padding(.vertical, 18)
             }
             .background(AppColor.screenBackground.ignoresSafeArea())
-            .navigationTitle("编辑资料")
+            .navigationTitle(appSettings.text("编辑资料", "Edit Profile"))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") {
+                    Button(appSettings.text("取消", "Cancel")) {
                         dismiss()
                     }
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") {
+                    Button(appSettings.text("完成", "Done")) {
                         saveAction(
                             UserHealthProfile(
                                 name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Bill" : name,
@@ -1838,15 +1920,16 @@ private struct EditorDateRow: View {
 }
 
 private struct MealTypeEditorRow: View {
+    @EnvironmentObject private var appSettings: AppSettings
     @Binding var selection: MealType
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            EditorFieldHeader(title: "餐别", subtitle: "这餐属于哪个时段", icon: "sparkles", tint: AppColor.violet)
+            EditorFieldHeader(title: appSettings.text("餐别", "Meal"), subtitle: appSettings.text("这餐属于哪个时段", "Which part of the day this meal belongs to"), icon: "sparkles", tint: AppColor.violet)
 
-            Picker("餐别", selection: $selection) {
+            Picker(appSettings.text("餐别", "Meal"), selection: $selection) {
                 ForEach(MealType.allCases) { type in
-                    Text(type.title).tag(type)
+                    Text(type.title(language: appSettings.resolvedLanguage)).tag(type)
                 }
             }
             .pickerStyle(.menu)
@@ -1860,16 +1943,17 @@ private struct MealTypeEditorRow: View {
 }
 
 private struct BiologicalSexEditorRow: View {
+    @EnvironmentObject private var appSettings: AppSettings
     @Binding var selection: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            EditorFieldHeader(title: "生理性别", subtitle: "用于基础代谢估算", icon: "figure.stand", tint: AppColor.violet)
+            EditorFieldHeader(title: appSettings.text("生理性别", "Biological Sex"), subtitle: appSettings.text("用于基础代谢估算", "Used to estimate basal burn"), icon: "figure.stand", tint: AppColor.violet)
 
-            Picker("生理性别", selection: $selection) {
-                Text("未指定").tag("unspecified")
-                Text("男").tag("male")
-                Text("女").tag("female")
+            Picker(appSettings.text("生理性别", "Biological Sex"), selection: $selection) {
+                Text(appSettings.text("未指定", "Not set")).tag("unspecified")
+                Text(appSettings.text("男", "Male")).tag("male")
+                Text(appSettings.text("女", "Female")).tag("female")
             }
             .pickerStyle(.segmented)
         }
@@ -1961,4 +2045,5 @@ private extension DailyHealthOverview {
 #Preview {
     ContentView()
         .environmentObject(HealthDashboardStore())
+        .environmentObject(AppSettings())
 }

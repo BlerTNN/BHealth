@@ -152,21 +152,54 @@ final class HealthDashboardStore: ObservableObject {
     }
 
     var assistantContextSummary: String {
+        assistantContextSummary(language: .chinese)
+    }
+
+    func assistantContextSummary(language: AppLanguage) -> String {
         let averageIntake = average(of: yearSummaries.suffix(30).map(\.intakeKcal))
         let averageBurn = average(of: yearSummaries.suffix(30).map(\.totalBurnKcal))
         let averageBalance = averageBurn - averageIntake
         let recentRecords = savedMealRecords
             .prefix(8)
             .map { record in
-                "\(record.consumedAt.formatted(date: .numeric, time: .omitted)) \(record.mealType.title) \(record.calculation.foodDisplayName) \(Int(record.calculation.totalEnergyKcal.rounded()))kcal"
+                "\(AppText.shortDate(record.consumedAt, language: language)) \(record.mealType.title(language: language)) \(record.calculation.foodDisplayName) \(Int(record.calculation.totalEnergyKcal.rounded()))kcal"
             }
-            .joined(separator: "；")
+            .joined(separator: AppText.text("；", "; ", language: language))
+
+        if language == .chinese {
+            return """
+            今日摄入 \(Int(today.intakeKcal.rounded())) kcal，总消耗 \(Int(today.totalBurnKcal.rounded())) kcal，运动消耗 \(Int(today.activeEnergyKcal.rounded())) kcal。
+            近30日平均摄入 \(Int(averageIntake.rounded())) kcal，平均消耗 \(Int(averageBurn.rounded())) kcal，平均热量差 \(Int(averageBalance.rounded())) kcal/日。
+            近期饮食记录：\(recentRecords.isEmpty ? "暂无" : recentRecords)
+            """
+        }
 
         return """
-        今日摄入 \(Int(today.intakeKcal.rounded())) kcal，总消耗 \(Int(today.totalBurnKcal.rounded())) kcal，运动消耗 \(Int(today.activeEnergyKcal.rounded())) kcal。
-        近30日平均摄入 \(Int(averageIntake.rounded())) kcal，平均消耗 \(Int(averageBurn.rounded())) kcal，平均热量差 \(Int(averageBalance.rounded())) kcal/日。
-        近期饮食记录：\(recentRecords.isEmpty ? "暂无" : recentRecords)
+        Today: intake \(Int(today.intakeKcal.rounded())) kcal, total burn \(Int(today.totalBurnKcal.rounded())) kcal, active burn \(Int(today.activeEnergyKcal.rounded())) kcal.
+        Last 30 days: average intake \(Int(averageIntake.rounded())) kcal, average burn \(Int(averageBurn.rounded())) kcal, average balance \(Int(averageBalance.rounded())) kcal/day.
+        Recent meal records: \(recentRecords.isEmpty ? "None" : recentRecords)
         """
+    }
+
+    func healthKitStatusMessage(language: AppLanguage) -> String {
+        switch healthKitStatusMessage {
+        case "尚未同步 Apple Health / Fitness":
+            return AppText.text("尚未同步 Apple Health / Fitness", "Apple Health / Fitness has not been synced", language: language)
+        case "当前设备不可用 HealthKit":
+            return AppText.text("当前设备不可用 HealthKit", "HealthKit is unavailable on this device", language: language)
+        case "当前设备不可用 HealthKit。请在 iPhone 或支持的模拟器上运行。":
+            return AppText.text("当前设备不可用 HealthKit。请在 iPhone 或支持的模拟器上运行。", "HealthKit is unavailable on this device. Run on an iPhone or supported simulator.", language: language)
+        case "Apple Health / Fitness 已同步":
+            return AppText.text("Apple Health / Fitness 已同步", "Apple Health / Fitness synced", language: language)
+        default:
+            if healthKitStatusMessage.contains("自动刷新失败") {
+                return AppText.text(healthKitStatusMessage, "Apple Health / Fitness auto refresh failed.", language: language)
+            }
+            if healthKitStatusMessage.contains("同步失败") {
+                return AppText.text(healthKitStatusMessage, "Apple Health sync failed.", language: language)
+            }
+            return healthKitStatusMessage
+        }
     }
 
     private func merge(snapshot: HealthKitSnapshot) {

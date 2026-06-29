@@ -236,17 +236,21 @@ enum EstimateConfidence: String, Codable, Hashable, Sendable {
     }
 
     var displayName: String {
+        displayName(language: .chinese)
+    }
+
+    func displayName(language: AppLanguage) -> String {
         switch self {
         case .high:
-            return "高"
+            return AppText.text("高", "High", language: language)
         case .mediumHigh:
-            return "中高"
+            return AppText.text("中高", "Medium-high", language: language)
         case .medium:
-            return "中等"
+            return AppText.text("中等", "Medium", language: language)
         case .low:
-            return "低"
+            return AppText.text("低", "Low", language: language)
         case .veryLow:
-            return "很低"
+            return AppText.text("很低", "Very low", language: language)
         }
     }
 }

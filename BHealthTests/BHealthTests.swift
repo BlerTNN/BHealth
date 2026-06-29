@@ -58,6 +58,27 @@ struct BHealthTests {
         #expect(!result.reply.contains("算法"))
     }
 
+    @Test func vagueFoodQuestionFollowsEnglishLanguage() async throws {
+        var session = FoodConversationSession()
+        let result = FoodConversationCoordinator().handle(
+            userText: "一碗小米粥",
+            mode: .foodLog,
+            session: &session,
+            referenceDate: Date(timeIntervalSince1970: 1_780_000_000),
+            language: .english
+        )
+
+        #expect(!result.shouldOfferSave)
+        #expect(result.reply.contains("Was this breakfast"))
+        #expect(!result.reply.contains("这是早餐"))
+    }
+
+    @Test func assistantModeTitlesFollowLanguage() async throws {
+        #expect(AssistantMode.foodLog.title(language: .english) == "Log Food")
+        #expect(AssistantMode.foodLog.title(language: .chinese) == "记录饮食")
+        #expect(AppLanguagePreference.system.title(language: .english) == "System")
+    }
+
     @Test func directEstimateUsesWideProbabilisticRange() async throws {
         var session = FoodConversationSession()
         let result = FoodConversationCoordinator().handle(

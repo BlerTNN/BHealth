@@ -18,7 +18,8 @@ struct FoodConversationCoordinator {
         userText: String,
         mode: AssistantMode,
         session: inout FoodConversationSession,
-        referenceDate: Date
+        referenceDate: Date,
+        language: AppLanguage = .chinese
     ) -> FoodAssistantTurnResult {
         session.turnCount += 1
         let drafts = parser.parse(
@@ -31,7 +32,11 @@ struct FoodConversationCoordinator {
 
         guard !drafts.isEmpty else {
             return FoodAssistantTurnResult(
-                reply: "我还没识别出具体食物。可以直接告诉我食物名称和大概份量，比如“一碗小米粥”或“250克熟米饭”。",
+                reply: AppText.text(
+                    "我还没识别出具体食物。可以直接告诉我食物名称和大概份量，比如“一碗小米粥”或“250克熟米饭”。",
+                    "I could not identify the food yet. Tell me the food name and rough portion, for example \"a bowl of millet porridge\" or \"250g cooked rice\".",
+                    language: language
+                ),
                 calculation: nil,
                 mealType: nil,
                 consumedAt: nil,
@@ -43,7 +48,8 @@ struct FoodConversationCoordinator {
         let selectedQuestions = questionSelector.questions(
             for: unresolved,
             session: session,
-            drafts: drafts
+            drafts: drafts,
+            language: language
         )
 
         if !selectedQuestions.isEmpty {
@@ -57,7 +63,11 @@ struct FoodConversationCoordinator {
 
             let questionText = selectedQuestions.map(\.text).joined(separator: "\n")
             return FoodAssistantTurnResult(
-                reply: "\(questionText)\n\n如果你不确定，也可以说“不知道”或“直接估算”，我会按常见情况给一个大致范围。",
+                reply: AppText.text(
+                    "\(questionText)\n\n如果你不确定，也可以说“不知道”或“直接估算”，我会按常见情况给一个大致范围。",
+                    "\(questionText)\n\nIf you are not sure, you can say \"I don't know\" or \"estimate directly\" and I will use a broad, common range.",
+                    language: language
+                ),
                 calculation: nil,
                 mealType: drafts.first?.mealType,
                 consumedAt: drafts.first?.consumedAt,
@@ -66,13 +76,14 @@ struct FoodConversationCoordinator {
         }
 
         do {
-            let result = try estimator.estimateMeal(drafts: drafts, sampleCount: 4_000)
+            let result = try estimator.estimateMeal(drafts: drafts, sampleCount: 4_000, language: language)
             let calculation = result.calculation
             let reply = explanationBuilder.confirmationReply(
                 calculation: calculation,
                 itemEstimates: result.itemEstimates,
                 mealType: drafts.first?.mealType,
-                consumedAt: drafts.first?.consumedAt
+                consumedAt: drafts.first?.consumedAt,
+                language: language
             )
             return FoodAssistantTurnResult(
                 reply: reply,
@@ -82,8 +93,9 @@ struct FoodConversationCoordinator {
                 shouldOfferSave: true
             )
         } catch {
+            let reason = AppText.text(error.localizedDescription, "food type is not confirmed yet", language: language)
             return FoodAssistantTurnResult(
-                reply: "这次信息还不足以做可靠估算：\(error.localizedDescription)",
+                reply: AppText.text("这次信息还不足以做可靠估算：\(reason)", "There is not enough information for a reliable estimate yet: \(reason)", language: language),
                 calculation: nil,
                 mealType: drafts.first?.mealType,
                 consumedAt: drafts.first?.consumedAt,
@@ -552,18 +564,19 @@ private struct QuestionSelectionEngine {
     func questions(
         for unresolvedFields: [FoodField],
         session: FoodConversationSession,
-        drafts: [FoodEventDraft]
+        drafts: [FoodEventDraft],
+        language: AppLanguage
     ) -> [Question] {
         let uniqueFields = orderedUnique(unresolvedFields)
         let forced = uniqueFields.filter { $0 == .mealType || $0 == .consumedAt || $0 == .foodIdentity }
         let asked = Set(session.askedFields)
         let remaining = (forced.isEmpty ? uniqueFields : forced).filter { !asked.contains($0) }
         let maxQuestions = forced.isEmpty ? 2 : 1
-        let questions = remaining.prefix(maxQuestions).compactMap { question(for: $0, drafts: drafts) }
+        let questions = remaining.prefix(maxQuestions).compactMap { question(for: $0, drafts: drafts, language: language) }
 
         if !questions.isEmpty { return questions }
         guard session.turnCount < 3 else { return [] }
-        return uniqueFields.filter { !asked.contains($0) }.prefix(2).compactMap { question(for: $0, drafts: drafts) }
+        return uniqueFields.filter { !asked.contains($0) }.prefix(2).compactMap { question(for: $0, drafts: drafts, language: language) }
     }
 
     private func orderedUnique(_ fields: [FoodField]) -> [FoodField] {
@@ -571,27 +584,32 @@ private struct QuestionSelectionEngine {
         return fields.filter { seen.insert($0).inserted }
     }
 
-    private func question(for field: FoodField, drafts: [FoodEventDraft]) -> Question? {
+    private func question(for field: FoodField, drafts: [FoodEventDraft], language: AppLanguage) -> Question? {
         switch field {
         case .mealType:
-            return Question(field: field, text: "这是早餐、午餐、晚餐、下午茶、加餐/零食还是夜宵？")
+            return Question(field: field, text: AppText.text("这是早餐、午餐、晚餐、下午茶、加餐/零食还是夜宵？", "Was this breakfast, lunch, dinner, afternoon tea, a snack, or late night?", language: language))
         case .consumedAt:
-            return Question(field: field, text: "这条历史记录是哪一天？可以说“昨天”“前天”或具体日期。")
+            return Question(field: field, text: AppText.text("这条历史记录是哪一天？可以说“昨天”“前天”或具体日期。", "What date is this past record for? You can say \"yesterday\", \"the day before yesterday\", or a specific date.", language: language))
         case .foodIdentity:
             let names = drafts.first?.foodCandidates.prefix(3).map(\.displayName).joined(separator: "、") ?? ""
-            return Question(field: field, text: names.isEmpty ? "这是哪一种食物？" : "我不太确定食物类型，是 \(names) 里的哪一种？")
+            return Question(
+                field: field,
+                text: names.isEmpty
+                    ? AppText.text("这是哪一种食物？", "What food is this?", language: language)
+                    : AppText.text("我不太确定食物类型，是 \(names) 里的哪一种？", "I am not sure which food this is. Is it one of these: \(names)?", language: language)
+            )
         case .containerClass:
-            return Question(field: field, text: "容器更接近小饭碗、普通饭碗还是大汤碗？")
+            return Question(field: field, text: AppText.text("容器更接近小饭碗、普通饭碗还是大汤碗？", "Was the container closer to a small rice bowl, regular bowl, or large soup bowl?", language: language))
         case .fillLevel:
-            return Question(field: field, text: "大约是半碗、七八分满，还是接近满碗？")
+            return Question(field: field, text: AppText.text("大约是半碗、七八分满，还是接近满碗？", "Was it about half full, 70-80% full, or nearly full?", language: language))
         case .consistency:
-            return Question(field: field, text: "稀稠度更接近偏稀、普通还是偏稠？")
+            return Question(field: field, text: AppText.text("稀稠度更接近偏稀、普通还是偏稠？", "Was the texture thin, regular, or thick?", language: language))
         case .highCalorieAdditions:
-            return Question(field: field, text: "有没有加糖、牛奶、炼乳、油或比较多的酱料？")
+            return Question(field: field, text: AppText.text("有没有加糖、牛奶、炼乳、油或比较多的酱料？", "Did it include sugar, milk, condensed milk, oil, or a lot of sauce?", language: language))
         case .consumedFraction:
-            return Question(field: field, text: "这份大概吃完了、吃了一半，还是只吃了少量？")
+            return Question(field: field, text: AppText.text("这份大概吃完了、吃了一半，还是只吃了少量？", "Did you finish it, eat about half, or only have a small amount?", language: language))
         case .spoonType:
-            return Question(field: field, text: "加糖那一勺更像小茶匙还是大汤匙？")
+            return Question(field: field, text: AppText.text("加糖那一勺更像小茶匙还是大汤匙？", "Was that spoon of sugar closer to a teaspoon or a tablespoon?", language: language))
         case .recipeVariant, .packageWeight:
             return nil
         }
@@ -645,9 +663,9 @@ private struct CalorieMonteCarloEstimator {
     private let portionPriors = PortionPriorRepository()
     private let recipes = RecipePrototypeRepository()
 
-    func estimateMeal(drafts: [FoodEventDraft], sampleCount: Int) throws -> MealEstimationResult {
+    func estimateMeal(drafts: [FoodEventDraft], sampleCount: Int, language: AppLanguage = .chinese) throws -> MealEstimationResult {
         var generator = SeededRandomGenerator(seed: UInt64(abs(drafts.map(\.rawText).joined().hashValue)) + 20260627)
-        let itemResults = try drafts.map { try estimateItem(draft: $0, sampleCount: sampleCount, generator: &generator) }
+        let itemResults = try drafts.map { try estimateItem(draft: $0, sampleCount: sampleCount, generator: &generator, language: language) }
         var totalSamples = Array(repeating: 0.0, count: sampleCount)
 
         for result in itemResults {
@@ -678,7 +696,7 @@ private struct CalorieMonteCarloEstimator {
                 confidence: result.estimate.confidence.legacyLabel,
                 sourceName: "BHealth probabilistic estimator",
                 sourceVersion: "probabilistic_estimator_v1",
-                assumptions: result.estimate.assumptions.map(\.description) + result.estimate.uncertaintyDrivers.map { "不确定性：\($0.description)" }
+                assumptions: result.estimate.assumptions.map(\.description) + result.estimate.uncertaintyDrivers.map { AppText.text("不确定性：\($0.description)", "Uncertainty: \($0.description)", language: language) }
             )
         }
 
@@ -688,7 +706,7 @@ private struct CalorieMonteCarloEstimator {
             rangeLowKcal: totalEstimate.p10,
             rangeHighKcal: totalEstimate.p90,
             confidence: totalEstimate.confidence.legacyLabel,
-            assumptions: totalEstimate.assumptions.map(\.description) + totalEstimate.uncertaintyDrivers.map { "不确定性：\($0.description)" },
+            assumptions: totalEstimate.assumptions.map(\.description) + totalEstimate.uncertaintyDrivers.map { AppText.text("不确定性：\($0.description)", "Uncertainty: \($0.description)", language: language) },
             sourceSummary: "probabilistic_estimator_v1 · \(totalEstimate.sourceIDs.joined(separator: " · "))"
         )
 
@@ -698,7 +716,8 @@ private struct CalorieMonteCarloEstimator {
     private func estimateItem(
         draft: FoodEventDraft,
         sampleCount: Int,
-        generator: inout SeededRandomGenerator
+        generator: inout SeededRandomGenerator,
+        language: AppLanguage
     ) throws -> ItemSamplingResult {
         guard let foodID = draft.selectedFoodID ?? draft.foodCandidates.first?.foodID else {
             throw EstimationError.unresolvedFood
@@ -725,8 +744,8 @@ private struct CalorieMonteCarloEstimator {
 
         let sourceIDs = ["curated_prior_v1", "recipe_prototype_v1", nutrient.sourceID]
         let confidence = confidence(for: [draft])
-        let assumptions = assumptions(for: draft)
-        let drivers = uncertaintyDrivers(for: draft)
+        let assumptions = assumptions(for: draft, language: language)
+        let drivers = uncertaintyDrivers(for: draft, language: language)
         let estimate = CalorieEstimate.make(
             samples: samples,
             confidence: confidence,
@@ -818,41 +837,41 @@ private struct CalorieMonteCarloEstimator {
         }
     }
 
-    private func assumptions(for draft: FoodEventDraft) -> [EstimateAssumption] {
+    private func assumptions(for draft: FoodEventDraft, language: AppLanguage) -> [EstimateAssumption] {
         var values: [String] = []
         if let grams = draft.exactWeightGrams {
-            values.append("按你提供的 \(Int(grams.rounded()))g 估算。")
+            values.append(AppText.text("按你提供的 \(Int(grams.rounded()))g 估算。", "Estimated from the \(Int(grams.rounded()))g you provided.", language: language))
         } else {
-            values.append("没有具体克重，按常见份量粗略估算。")
+            values.append(AppText.text("没有具体克重，按常见份量粗略估算。", "No exact weight was provided, so I used a common portion estimate.", language: language))
         }
         if let container = draft.containerClass, container != .unknown {
-            values.append("份量按\(container.displayName)估算。")
+            values.append(AppText.text("份量按\(container.displayName(language: language))估算。", "Portion estimated as a \(container.displayName(language: language)).", language: language))
         }
         if let fill = draft.fillLevel, fill != .unknown {
-            values.append("装满程度按\(fill.displayName)估算。")
+            values.append(AppText.text("装满程度按\(fill.displayName(language: language))估算。", "Fill level estimated as \(fill.displayName(language: language)).", language: language))
         }
         if let consistency = draft.consistencyClass, consistency != .unknown {
-            values.append("口感按\(consistency.displayName)估算。")
+            values.append(AppText.text("口感按\(consistency.displayName(language: language))估算。", "Texture estimated as \(consistency.displayName(language: language)).", language: language))
         }
         if draft.exclusions.contains(.noSugar) {
-            values.append("用户说明未加糖。")
+            values.append(AppText.text("用户说明未加糖。", "You said there was no added sugar.", language: language))
         }
         return values.map { EstimateAssumption(description: $0) }
     }
 
-    private func uncertaintyDrivers(for draft: FoodEventDraft) -> [UncertaintyDriver] {
+    private func uncertaintyDrivers(for draft: FoodEventDraft, language: AppLanguage) -> [UncertaintyDriver] {
         var drivers: [String] = []
         if draft.exactWeightGrams == nil {
-            drivers.append("实际克重未知。")
+            drivers.append(AppText.text("实际克重未知。", "Exact weight is unknown.", language: language))
         }
         if draft.containerClass == nil || draft.containerClass == .unknown {
-            drivers.append("容器大小未明确。")
+            drivers.append(AppText.text("容器大小未明确。", "Container size is unclear.", language: language))
         }
         if draft.consistencyClass == nil || draft.consistencyClass == .unknown, draft.foodCategory == .porridge {
-            drivers.append("粥的米水比例未知。")
+            drivers.append(AppText.text("粥的米水比例未知。", "The grain-to-water ratio is unknown.", language: language))
         }
         if draft.fillLevel == nil || draft.fillLevel == .unknown, draft.foodCategory == .porridge {
-            drivers.append("装满程度未明确。")
+            drivers.append(AppText.text("装满程度未明确。", "Fill level is unclear.", language: language))
         }
         return drivers.map { UncertaintyDriver(description: $0) }
     }
@@ -1085,7 +1104,8 @@ private struct MealExplanationBuilder {
         calculation: MealCalculationResult,
         itemEstimates: [CalorieEstimate],
         mealType: MealType?,
-        consumedAt: Date?
+        consumedAt: Date?,
+        language: AppLanguage
     ) -> String {
         let kcal = roundedKcal(calculation.totalEnergyKcal)
         let low = roundedKcal(calculation.rangeLowKcal)
@@ -1093,12 +1113,27 @@ private struct MealExplanationBuilder {
         let confidence = itemEstimates.map(\.confidence).minByRank ?? .low
         let assumptions = Array(calculation.assumptions.prefix(3)).joined(separator: "\n- ")
 
+        if language == .english {
+            return """
+            Estimated intake: about \(kcal) kcal
+            Likely range: \(low)-\(high) kcal
+            Confidence: \(confidence.displayName(language: language))
+
+            I understood this as: \(mealType?.title(language: language) ?? "meal pending"), \(consumedAt.map { AppText.shortDate($0, language: language) } ?? "date pending"), \(calculation.foodDisplayName)
+
+            My working assumptions:
+            - \(assumptions.isEmpty ? "Estimated from a common portion." : assumptions)
+
+            Confirm and save this meal record?
+            """
+        }
+
         return """
         估计摄入：约 \(kcal) kcal
         较可能范围：\(low)-\(high) kcal
-        可信度：\(confidence.displayName)
+        可信度：\(confidence.displayName(language: language))
 
-        已用信息：\(mealType?.title ?? "餐别待确认")，\(consumedAt?.formatted(date: .abbreviated, time: .omitted) ?? "日期待确认")，\(calculation.foodDisplayName)
+        已用信息：\(mealType?.title(language: language) ?? "餐别待确认")，\(consumedAt.map { AppText.shortDate($0, language: language) } ?? "日期待确认")，\(calculation.foodDisplayName)
 
         我先按这些信息理解：
         - \(assumptions.isEmpty ? "按常见份量做粗略估算。" : assumptions)
@@ -1198,51 +1233,63 @@ private extension EstimateConfidence {
 
 private extension ContainerClass {
     var displayName: String {
+        displayName(language: .chinese)
+    }
+
+    func displayName(language: AppLanguage) -> String {
         switch self {
-        case .smallRiceBowl: return "小饭碗"
-        case .regularRiceBowl: return "普通饭碗"
-        case .largeSoupBowl: return "大汤碗"
-        case .smallCup: return "小杯"
-        case .regularCup: return "普通杯"
-        case .largeMug: return "大杯"
-        case .smallPlate: return "小盘"
-        case .regularPlate: return "普通盘"
-        case .largePlate: return "大盘"
-        case .tablespoon: return "汤匙"
-        case .teaspoon: return "茶匙"
-        case .handful: return "一把"
-        case .piece: return "单个"
-        case .slice: return "一片"
-        case .package: return "包装"
-        case .unknown: return "未知容器"
+        case .smallRiceBowl: return AppText.text("小饭碗", "small rice bowl", language: language)
+        case .regularRiceBowl: return AppText.text("普通饭碗", "regular bowl", language: language)
+        case .largeSoupBowl: return AppText.text("大汤碗", "large soup bowl", language: language)
+        case .smallCup: return AppText.text("小杯", "small cup", language: language)
+        case .regularCup: return AppText.text("普通杯", "regular cup", language: language)
+        case .largeMug: return AppText.text("大杯", "large mug", language: language)
+        case .smallPlate: return AppText.text("小盘", "small plate", language: language)
+        case .regularPlate: return AppText.text("普通盘", "regular plate", language: language)
+        case .largePlate: return AppText.text("大盘", "large plate", language: language)
+        case .tablespoon: return AppText.text("汤匙", "tablespoon", language: language)
+        case .teaspoon: return AppText.text("茶匙", "teaspoon", language: language)
+        case .handful: return AppText.text("一把", "handful", language: language)
+        case .piece: return AppText.text("单个", "piece", language: language)
+        case .slice: return AppText.text("一片", "slice", language: language)
+        case .package: return AppText.text("包装", "package", language: language)
+        case .unknown: return AppText.text("未知容器", "unknown container", language: language)
         }
     }
 }
 
 private extension FillLevel {
     var displayName: String {
+        displayName(language: .chinese)
+    }
+
+    func displayName(language: AppLanguage) -> String {
         switch self {
-        case .quarter: return "四分之一"
-        case .half: return "半份"
-        case .threeQuarters: return "大半份"
-        case .eightyPercent: return "八分满"
-        case .nearlyFull: return "接近满"
-        case .full: return "满"
-        case .heaped: return "冒尖"
-        case .unknown: return "未知"
+        case .quarter: return AppText.text("四分之一", "quarter", language: language)
+        case .half: return AppText.text("半份", "half", language: language)
+        case .threeQuarters: return AppText.text("大半份", "three quarters", language: language)
+        case .eightyPercent: return AppText.text("八分满", "80% full", language: language)
+        case .nearlyFull: return AppText.text("接近满", "nearly full", language: language)
+        case .full: return AppText.text("满", "full", language: language)
+        case .heaped: return AppText.text("冒尖", "heaped", language: language)
+        case .unknown: return AppText.text("未知", "unknown", language: language)
         }
     }
 }
 
 private extension ConsistencyClass {
     var displayName: String {
+        displayName(language: .chinese)
+    }
+
+    func displayName(language: AppLanguage) -> String {
         switch self {
-        case .veryThin: return "很稀"
-        case .thin: return "偏稀"
-        case .regular: return "普通"
-        case .thick: return "偏稠"
-        case .veryThick: return "很稠"
-        case .unknown: return "未知"
+        case .veryThin: return AppText.text("很稀", "very thin", language: language)
+        case .thin: return AppText.text("偏稀", "thin", language: language)
+        case .regular: return AppText.text("普通", "regular", language: language)
+        case .thick: return AppText.text("偏稠", "thick", language: language)
+        case .veryThick: return AppText.text("很稠", "very thick", language: language)
+        case .unknown: return AppText.text("未知", "unknown", language: language)
         }
     }
 }

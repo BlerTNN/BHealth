@@ -243,21 +243,25 @@ enum MealType: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
     var id: String { rawValue }
 
     var title: String {
+        title(language: .chinese)
+    }
+
+    func title(language: AppLanguage) -> String {
         switch self {
         case .breakfast:
-            return "早餐"
+            return AppText.text("早餐", "Breakfast", language: language)
         case .lunch:
-            return "午餐"
+            return AppText.text("午餐", "Lunch", language: language)
         case .dinner:
-            return "晚餐"
+            return AppText.text("晚餐", "Dinner", language: language)
         case .afternoonTea:
-            return "下午茶"
+            return AppText.text("下午茶", "Afternoon tea", language: language)
         case .snack:
-            return "加餐/零食"
+            return AppText.text("加餐/零食", "Snack", language: language)
         case .lateNight:
-            return "夜宵"
+            return AppText.text("夜宵", "Late night", language: language)
         case .other:
-            return "其他"
+            return AppText.text("其他", "Other", language: language)
         }
     }
 
@@ -450,24 +454,24 @@ struct MealNutritionCalculator {
         self.index = index
     }
 
-    func calculate(from userText: String) -> MealCalculationResult? {
+    func calculate(from userText: String, language: AppLanguage = .chinese) -> MealCalculationResult? {
         let mentions = FoodMentionExtractor.mentions(from: userText)
         var calculations: [MealItemCalculation] = []
         var assumptions = Set<String>()
 
         for mention in mentions {
             guard let match = index.search(query: mention.query, limit: 1).first, match.score >= 3.0 else {
-                assumptions.insert("还没能可靠识别“\(mention.rawText)”，暂不把它计入估算。")
+                assumptions.insert(AppText.text("还没能可靠识别“\(mention.rawText)”，暂不把它计入估算。", "I could not reliably identify \"\(mention.rawText)\", so it was not included in this estimate.", language: language))
                 continue
             }
 
-            let quantity = FoodQuantityEstimator.estimateGrams(for: match.item, from: mention.rawText)
+            let quantity = FoodQuantityEstimator.estimateGrams(for: match.item, from: mention.rawText, language: language)
             let factor = quantity.grams / 100.0
             let nutrients = match.item.nutrientsPer100g
             let energy = nutrients.energyKcalPer100g * factor
             let confidence = confidenceLabel(for: match.score, quantity: quantity)
             let itemAssumptions = quantity.assumptions + [
-                "参考常见的 \(match.item.description) 营养信息估算。"
+                AppText.text("参考常见的 \(match.item.description) 营养信息估算。", "Estimated using common nutrition information for \(match.item.description).", language: language)
             ]
 
             itemAssumptions.forEach { assumptions.insert($0) }
@@ -523,12 +527,12 @@ struct QuantityEstimate: Hashable {
 }
 
 enum FoodQuantityEstimator {
-    static func estimateGrams(for item: FoodNutritionItem, from text: String) -> QuantityEstimate {
+    static func estimateGrams(for item: FoodNutritionItem, from text: String, language: AppLanguage = .chinese) -> QuantityEstimate {
         if let explicitGrams = explicitGramAmount(in: text) {
             return QuantityEstimate(
                 grams: explicitGrams,
                 isExplicit: true,
-                assumptions: ["按用户提供的 \(format(explicitGrams))g 计算。"]
+                assumptions: [AppText.text("按用户提供的 \(format(explicitGrams))g 计算。", "Calculated from the provided \(format(explicitGrams))g.", language: language)]
             )
         }
 
@@ -540,7 +544,7 @@ enum FoodQuantityEstimator {
             return QuantityEstimate(
                 grams: grams * amount,
                 isExplicit: false,
-                assumptions: ["未提供克重，按 \(format(amount)) 杯约 \(format(grams * amount))g 估算。"]
+                assumptions: [AppText.text("未提供克重，按 \(format(amount)) 杯约 \(format(grams * amount))g 估算。", "No exact weight was provided; estimated \(format(amount)) cup(s) as about \(format(grams * amount))g.", language: language)]
             )
         }
 
@@ -549,7 +553,7 @@ enum FoodQuantityEstimator {
             return QuantityEstimate(
                 grams: grams * amount,
                 isExplicit: false,
-                assumptions: ["未提供克重，按 \(format(amount)) 片约 \(format(grams * amount))g 估算。"]
+                assumptions: [AppText.text("未提供克重，按 \(format(amount)) 片约 \(format(grams * amount))g 估算。", "No exact weight was provided; estimated \(format(amount)) slice(s) as about \(format(grams * amount))g.", language: language)]
             )
         }
 
@@ -558,7 +562,7 @@ enum FoodQuantityEstimator {
             return QuantityEstimate(
                 grams: grams * amount,
                 isExplicit: false,
-                assumptions: ["未提供克重，按 \(format(amount)) 个常见份量约 \(format(grams * amount))g 估算。"]
+                assumptions: [AppText.text("未提供克重，按 \(format(amount)) 个常见份量约 \(format(grams * amount))g 估算。", "No exact weight was provided; estimated \(format(amount)) common piece(s) as about \(format(grams * amount))g.", language: language)]
             )
         }
 
@@ -566,14 +570,14 @@ enum FoodQuantityEstimator {
             return QuantityEstimate(
                 grams: portion.grams * amount,
                 isExplicit: false,
-                assumptions: ["未提供克重，按 \(format(amount)) 份 \(portion.label) 约 \(format(portion.grams * amount))g 估算。"]
+                assumptions: [AppText.text("未提供克重，按 \(format(amount)) 份 \(portion.label) 约 \(format(portion.grams * amount))g 估算。", "No exact weight was provided; estimated \(format(amount)) serving(s) as about \(format(portion.grams * amount))g.", language: language)]
             )
         }
 
         return QuantityEstimate(
             grams: 100 * amount,
             isExplicit: false,
-            assumptions: ["未提供克重或标准份量，暂按 \(format(100 * amount))g 估算。"]
+            assumptions: [AppText.text("未提供克重或标准份量，暂按 \(format(100 * amount))g 估算。", "No exact weight or standard portion was provided; estimated about \(format(100 * amount))g.", language: language)]
         )
     }
 
