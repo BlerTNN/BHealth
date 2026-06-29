@@ -231,4 +231,28 @@ struct BHealthTests {
         #expect(review.foodItems == ["三文鱼紫薯糙米能量碗"])
     }
 
+    @Test func assistantReplyFallsBackToPlainTextWhenModelSkipsJSON() {
+        let reply = AssistantAIReply.parseOrFallback(
+            from: "这是哪一餐？早餐、午餐还是晚餐？",
+            language: .chinese
+        )
+
+        #expect(reply.reply == "这是哪一餐？早餐、午餐还是晚餐？")
+        #expect(!reply.shouldOfferSave)
+        #expect(reply.mealType == nil)
+    }
+
+    @Test func assistantReplyFallbackExtractsReplyFromMalformedJSON() {
+        let content = """
+        {
+          "reply": "我理解为你昨晚吃了一碗卤煮火烧。请再告诉我这是晚餐还是夜宵？",
+          "assistant_state": "collecting",
+          "should_offer_save": tru
+        """
+
+        let reply = AssistantAIReply.parseOrFallback(from: content, language: .chinese)
+        #expect(reply.reply == "我理解为你昨晚吃了一碗卤煮火烧。请再告诉我这是晚餐还是夜宵？")
+        #expect(!reply.shouldOfferSave)
+    }
+
 }

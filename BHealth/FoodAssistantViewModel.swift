@@ -250,10 +250,6 @@ final class FoodAssistantViewModel: ObservableObject {
                 )
             }
         } catch {
-            if isAIResponseFormatError(error) {
-                handleAIResponseFormatIssue(language: language)
-                return
-            }
             handleAPIUnavailable(
                 userText: text,
                 mode: mode,
@@ -261,10 +257,6 @@ final class FoodAssistantViewModel: ObservableObject {
                 referenceDate: referenceDate
             )
         }
-    }
-
-    private func isAIResponseFormatError(_ error: Error) -> Bool {
-        error is AssistantAIReplyError || error is DecodingError
     }
 
     private func assistantErrorMessage(_ error: Error, language: AppLanguage) -> String {
@@ -278,19 +270,6 @@ final class FoodAssistantViewModel: ObservableObject {
             return error.message(language: language)
         }
         return error.localizedDescription
-    }
-
-    private func handleAIResponseFormatIssue(language: AppLanguage) {
-        messages.append(
-            AssistantMessage(
-                text: AppText.text(
-                    "AI 回复格式异常，我没有保存这条记录。请再发送一次，或把食物和份量说得更直接一点。",
-                    "The AI response format was unusual, so I did not save this record. Please send it again, or describe the food and portion a bit more directly.",
-                    language: language
-                ),
-                isFromUser: false
-            )
-        )
     }
 
     private func handleAPIUnavailable(
@@ -653,7 +632,7 @@ struct FoodAssistantEngine {
         12. normalized_food_text 是给本地计算器使用的隐藏字段，优先用简体中文，保留食物名称、数量、容器、稀稠度、配料、吃完比例等关键信息，不要包含日期、餐别、kcal、聊天语气、确认话术；信息不足时填 null。
         13. 给用户看的 reply 不能提到 local_calculation_context、算法、程序计算、USDA、数据库、概率、先验、配方原型等实现细节；要像自然的 AI 助手一样追问和确认。
         14. reply、assumptions、source_summary 必须使用 \(responseLanguage)。如果用户输入是另一种语言，也要优先服从这个 App 语言设置。
-        15. 输出严格 JSON，不要 Markdown，不要代码块。
+        15. 输出严格 JSON，不要 Markdown，不要代码块。reply 必须是非空字符串，should_offer_save 必须是 JSON boolean，不要写成字符串。
 
         JSON schema:
         {
@@ -701,7 +680,7 @@ struct FoodAssistantEngine {
             + [DeepSeekMessage(role: "user", content: userPrompt)]
 
         let content = try await client.complete(messages: messages)
-        return try AssistantAIReply.parse(from: content)
+        return AssistantAIReply.parseOrFallback(from: content, language: language)
     }
 
     func reviewEstimate(
@@ -808,6 +787,36 @@ struct AssistantAIReply: Codable, Hashable {
         case sourceSummary = "source_summary"
     }
 
+    init(
+        reply: String,
+        assistantState: String = "collecting",
+        confidence: String = "none",
+        shouldOfferSave: Bool = false,
+        estimatedEnergyKcal: Double? = nil,
+        energyLowKcal: Double? = nil,
+        energyHighKcal: Double? = nil,
+        mealTypeRaw: String? = nil,
+        consumedAtRaw: String? = nil,
+        foodItems: [String]? = nil,
+        normalizedFoodText: String? = nil,
+        assumptions: [String]? = nil,
+        sourceSummary: String? = nil
+    ) {
+        self.reply = reply
+        self.assistantState = assistantState
+        self.confidence = confidence
+        self.shouldOfferSave = shouldOfferSave
+        self.estimatedEnergyKcal = estimatedEnergyKcal
+        self.energyLowKcal = energyLowKcal
+        self.energyHighKcal = energyHighKcal
+        self.mealTypeRaw = mealTypeRaw
+        self.consumedAtRaw = consumedAtRaw
+        self.foodItems = foodItems
+        self.normalizedFoodText = normalizedFoodText
+        self.assumptions = assumptions
+        self.sourceSummary = sourceSummary
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         reply = container.decodeLossyString(forKey: .reply) ?? ""
@@ -828,6 +837,28 @@ struct AssistantAIReply: Codable, Hashable {
     static func parse(from content: String) throws -> AssistantAIReply {
         let data = try AssistantJSONPayload.data(from: content)
         return try JSONDecoder().decode(AssistantAIReply.self, from: data)
+    }
+
+    static func parseOrFallback(from content: String, language: AppLanguage) -> AssistantAIReply {
+        do {
+            let parsed = try parse(from: content)
+            let reply = parsed.reply.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !reply.isEmpty else {
+                return plainTextFallback(from: content, language: language)
+            }
+            return parsed
+        } catch {
+            return plainTextFallback(from: content, language: language)
+        }
+    }
+
+    private static func plainTextFallback(from content: String, language: AppLanguage) -> AssistantAIReply {
+        AssistantAIReply(
+            reply: AssistantTextFallback.reply(from: content, language: language),
+            assistantState: "collecting",
+            confidence: "none",
+            shouldOfferSave: false
+        )
     }
 
     func estimatedCalculation(for userText: String, language: AppLanguage = .chinese) -> MealCalculationResult? {
@@ -996,10 +1027,7 @@ private enum EstimatePlausibility {
 
 private enum AssistantJSONPayload {
     static func data(from content: String) throws -> Data {
-        let cleaned = content
-            .replacingOccurrences(of: "```json", with: "")
-            .replacingOccurrences(of: "```", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = cleanedText(from: content)
 
         if let data = cleaned.data(using: .utf8),
            (try? JSONSerialization.jsonObject(with: data)) != nil {
@@ -1014,7 +1042,31 @@ private enum AssistantJSONPayload {
         return data
     }
 
+    static func cleanedText(from content: String) -> String {
+        content
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```JSON", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func textWithoutFirstJSONObject(from text: String) -> String {
+        guard let range = firstJSONObjectRange(in: text) else {
+            return text
+        }
+        var remaining = text
+        remaining.removeSubrange(range)
+        return remaining.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private static func firstJSONObject(in text: String) -> String? {
+        guard let range = firstJSONObjectRange(in: text) else {
+            return nil
+        }
+        return String(text[range])
+    }
+
+    private static func firstJSONObjectRange(in text: String) -> ClosedRange<String.Index>? {
         var startIndex: String.Index?
         var depth = 0
         var isInsideString = false
@@ -1054,12 +1106,93 @@ private enum AssistantJSONPayload {
             if character == "}", depth > 0 {
                 depth -= 1
                 if depth == 0, let startIndex {
-                    return String(text[startIndex...index])
+                    return startIndex...index
                 }
             }
         }
 
         return nil
+    }
+}
+
+private enum AssistantTextFallback {
+    static func reply(from content: String, language: AppLanguage) -> String {
+        let cleaned = AssistantJSONPayload.cleanedText(from: content)
+        if let reply = extractedReplyValue(from: cleaned) {
+            return reply
+        }
+
+        let withoutJSON = AssistantJSONPayload.textWithoutFirstJSONObject(from: cleaned)
+        let candidate = (withoutJSON.isEmpty ? cleaned : withoutJSON)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !candidate.isEmpty, !candidate.looksLikeRawJSON else {
+            return AppText.text(
+                "我理解了。你可以继续补充餐别、日期或大致份量，我会接着帮你记录。",
+                "I understand. You can keep adding the meal, date, or rough portion, and I will continue helping you log it.",
+                language: language
+            )
+        }
+
+        return candidate
+    }
+
+    private static func extractedReplyValue(from text: String) -> String? {
+        guard let keyRange = text.range(of: "\"reply\"") ?? text.range(of: "'reply'") else {
+            return nil
+        }
+        guard let colonIndex = text[keyRange.upperBound...].firstIndex(of: ":") else {
+            return nil
+        }
+
+        var index = text.index(after: colonIndex)
+        while index < text.endIndex, text[index].isWhitespace {
+            index = text.index(after: index)
+        }
+        guard index < text.endIndex else {
+            return nil
+        }
+
+        let quote = text[index]
+        guard quote == "\"" || quote == "'" else {
+            return nil
+        }
+
+        var value = ""
+        var isEscaped = false
+        index = text.index(after: index)
+
+        while index < text.endIndex {
+            let character = text[index]
+            if isEscaped {
+                value.append(unescaped(character))
+                isEscaped = false
+            } else if character == "\\" {
+                isEscaped = true
+            } else if character == quote {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            } else {
+                value.append(character)
+            }
+            index = text.index(after: index)
+        }
+
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func unescaped(_ character: Character) -> Character {
+        switch character {
+        case "n":
+            return "\n"
+        case "t":
+            return "\t"
+        case "r":
+            return "\r"
+        default:
+            return character
+        }
     }
 }
 
@@ -1157,6 +1290,12 @@ private extension String {
     var isNullLiteral: Bool {
         let normalized = lowercased()
         return normalized == "null" || normalized == "nil" || normalized == "none" || normalized == "无"
+    }
+
+    var looksLikeRawJSON: Bool {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first else { return false }
+        return (first == "{" || first == "[") && trimmed.contains(":")
     }
 }
 
