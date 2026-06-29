@@ -1138,6 +1138,18 @@ private struct AssistantView: View {
             .background(.regularMaterial)
         }
         .navigationTitle(mode.title(language: appSettings.resolvedLanguage))
+        .alert(item: $viewModel.localAlgorithmFallbackRequest) { request in
+            Alert(
+                title: Text(appSettings.text("当前 API 不可用", "API Unavailable")),
+                message: Text(request.message(language: appSettings.resolvedLanguage)),
+                primaryButton: .default(Text(appSettings.text("通过算法估算", "Use Local Estimate"))) {
+                    viewModel.runLocalAlgorithmFallback(request)
+                },
+                secondaryButton: .cancel(Text(appSettings.text("取消", "Cancel"))) {
+                    viewModel.cancelLocalAlgorithmFallback()
+                }
+            )
+        }
     }
 }
 
