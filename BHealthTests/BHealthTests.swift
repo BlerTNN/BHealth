@@ -182,4 +182,53 @@ struct BHealthTests {
         #expect(calculation.totalEnergyKcal < 1_200)
     }
 
+    @Test func assistantReplyParserAcceptsCommonModelJSONVariations() throws {
+        let content = """
+        ```json
+        {
+          "reply": "我先理解为午餐吃了一碗小米粥。",
+          "assistant_state": "confirming",
+          "confidence": "medium",
+          "should_offer_save": "true",
+          "estimated_energy_kcal": "null",
+          "energy_low_kcal": null,
+          "energy_high_kcal": null,
+          "meal_type": "lunch",
+          "consumed_at": "2026-06-29",
+          "food_items": "小米粥",
+          "normalized_food_text": "一碗小米粥",
+          "assumptions": "按普通饭碗估算",
+          "source_summary": null
+        }
+        ```
+        """
+
+        let reply = try AssistantAIReply.parse(from: content)
+        #expect(reply.shouldOfferSave)
+        #expect(reply.mealType == .lunch)
+        #expect(reply.foodItems == ["小米粥"])
+        #expect(reply.assumptions == ["按普通饭碗估算"])
+        #expect(reply.estimatedEnergyKcal == nil)
+    }
+
+    @Test func sanityReviewParserExtractsJSONAndDefaultsMissingOverride() throws {
+        let content = """
+        这是校验结果：
+        {
+          "corrected_energy_kcal": "560 kcal",
+          "corrected_low_kcal": "450",
+          "corrected_high_kcal": "700",
+          "confidence": "medium",
+          "food_items": "三文鱼紫薯糙米能量碗",
+          "assumptions": "按普通单人份饭碗估算",
+          "source_summary": "常见单人份经验估算"
+        }
+        """
+
+        let review = try CalorieSanityReview.parse(from: content)
+        #expect(!review.shouldOverride)
+        #expect(review.correctedEnergyKcal == 560)
+        #expect(review.foodItems == ["三文鱼紫薯糙米能量碗"])
+    }
+
 }

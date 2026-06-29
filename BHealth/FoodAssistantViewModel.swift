@@ -250,6 +250,10 @@ final class FoodAssistantViewModel: ObservableObject {
                 )
             }
         } catch {
+            if isAIResponseFormatError(error) {
+                handleAIResponseFormatIssue(language: language)
+                return
+            }
             handleAPIUnavailable(
                 userText: text,
                 mode: mode,
@@ -257,6 +261,10 @@ final class FoodAssistantViewModel: ObservableObject {
                 referenceDate: referenceDate
             )
         }
+    }
+
+    private func isAIResponseFormatError(_ error: Error) -> Bool {
+        error is AssistantAIReplyError || error is DecodingError
     }
 
     private func assistantErrorMessage(_ error: Error, language: AppLanguage) -> String {
@@ -270,6 +278,19 @@ final class FoodAssistantViewModel: ObservableObject {
             return error.message(language: language)
         }
         return error.localizedDescription
+    }
+
+    private func handleAIResponseFormatIssue(language: AppLanguage) {
+        messages.append(
+            AssistantMessage(
+                text: AppText.text(
+                    "AI 回复格式异常，我没有保存这条记录。请再发送一次，或把食物和份量说得更直接一点。",
+                    "The AI response format was unusual, so I did not save this record. Please send it again, or describe the food and portion a bit more directly.",
+                    language: language
+                ),
+                isFromUser: false
+            )
+        )
     }
 
     private func handleAPIUnavailable(
@@ -787,16 +808,25 @@ struct AssistantAIReply: Codable, Hashable {
         case sourceSummary = "source_summary"
     }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        reply = container.decodeLossyString(forKey: .reply) ?? ""
+        assistantState = container.decodeLossyString(forKey: .assistantState) ?? "collecting"
+        confidence = container.decodeLossyString(forKey: .confidence) ?? "none"
+        shouldOfferSave = container.decodeLossyBool(forKey: .shouldOfferSave, defaultValue: false)
+        estimatedEnergyKcal = container.decodeLossyDouble(forKey: .estimatedEnergyKcal)
+        energyLowKcal = container.decodeLossyDouble(forKey: .energyLowKcal)
+        energyHighKcal = container.decodeLossyDouble(forKey: .energyHighKcal)
+        mealTypeRaw = container.decodeLossyString(forKey: .mealTypeRaw)
+        consumedAtRaw = container.decodeLossyString(forKey: .consumedAtRaw)
+        foodItems = container.decodeLossyStringArray(forKey: .foodItems)
+        normalizedFoodText = container.decodeLossyString(forKey: .normalizedFoodText)
+        assumptions = container.decodeLossyStringArray(forKey: .assumptions)
+        sourceSummary = container.decodeLossyString(forKey: .sourceSummary)
+    }
+
     static func parse(from content: String) throws -> AssistantAIReply {
-        let cleaned = content
-            .replacingOccurrences(of: "```json", with: "")
-            .replacingOccurrences(of: "```", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard let data = cleaned.data(using: .utf8) else {
-            throw AssistantAIReplyError.invalidEncoding
-        }
-
+        let data = try AssistantJSONPayload.data(from: content)
         return try JSONDecoder().decode(AssistantAIReply.self, from: data)
     }
 
@@ -861,16 +891,21 @@ struct CalorieSanityReview: Codable, Hashable {
         case replyAdjustment = "reply_adjustment"
     }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        shouldOverride = container.decodeLossyBool(forKey: .shouldOverride, defaultValue: false)
+        correctedEnergyKcal = container.decodeLossyDouble(forKey: .correctedEnergyKcal)
+        correctedLowKcal = container.decodeLossyDouble(forKey: .correctedLowKcal)
+        correctedHighKcal = container.decodeLossyDouble(forKey: .correctedHighKcal)
+        confidence = container.decodeLossyString(forKey: .confidence)
+        foodItems = container.decodeLossyStringArray(forKey: .foodItems)
+        assumptions = container.decodeLossyStringArray(forKey: .assumptions)
+        sourceSummary = container.decodeLossyString(forKey: .sourceSummary)
+        replyAdjustment = container.decodeLossyString(forKey: .replyAdjustment)
+    }
+
     static func parse(from content: String) throws -> CalorieSanityReview {
-        let cleaned = content
-            .replacingOccurrences(of: "```json", with: "")
-            .replacingOccurrences(of: "```", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard let data = cleaned.data(using: .utf8) else {
-            throw AssistantAIReplyError.invalidEncoding
-        }
-
+        let data = try AssistantJSONPayload.data(from: content)
         return try JSONDecoder().decode(CalorieSanityReview.self, from: data)
     }
 
@@ -956,6 +991,172 @@ private enum EstimatePlausibility {
 
         guard seemsSingleServing, !explicitlyLarge else { return false }
         return calculation.totalEnergyKcal > 1_500 || calculation.rangeHighKcal > 2_000
+    }
+}
+
+private enum AssistantJSONPayload {
+    static func data(from content: String) throws -> Data {
+        let cleaned = content
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let data = cleaned.data(using: .utf8),
+           (try? JSONSerialization.jsonObject(with: data)) != nil {
+            return data
+        }
+
+        guard let object = firstJSONObject(in: cleaned),
+              let data = object.data(using: .utf8) else {
+            throw AssistantAIReplyError.invalidEncoding
+        }
+
+        return data
+    }
+
+    private static func firstJSONObject(in text: String) -> String? {
+        var startIndex: String.Index?
+        var depth = 0
+        var isInsideString = false
+        var isEscaped = false
+
+        for index in text.indices {
+            let character = text[index]
+
+            if isInsideString {
+                if isEscaped {
+                    isEscaped = false
+                    continue
+                }
+                if character == "\\" {
+                    isEscaped = true
+                    continue
+                }
+                if character == "\"" {
+                    isInsideString = false
+                }
+                continue
+            }
+
+            if character == "\"" {
+                isInsideString = true
+                continue
+            }
+
+            if character == "{" {
+                if depth == 0 {
+                    startIndex = index
+                }
+                depth += 1
+                continue
+            }
+
+            if character == "}", depth > 0 {
+                depth -= 1
+                if depth == 0, let startIndex {
+                    return String(text[startIndex...index])
+                }
+            }
+        }
+
+        return nil
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decodeLossyString(forKey key: Key) -> String? {
+        if (try? decodeNil(forKey: key)) == true {
+            return nil
+        }
+        if let value = try? decode(String.self, forKey: key) {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isNullLiteral ? nil : trimmed
+        }
+        if let value = try? decode(Double.self, forKey: key) {
+            return String(value)
+        }
+        if let value = try? decode(Int.self, forKey: key) {
+            return String(value)
+        }
+        if let value = try? decode(Bool.self, forKey: key) {
+            return value ? "true" : "false"
+        }
+        return nil
+    }
+
+    func decodeLossyBool(forKey key: Key, defaultValue: Bool) -> Bool {
+        if let value = try? decode(Bool.self, forKey: key) {
+            return value
+        }
+        if let value = decodeLossyString(forKey: key)?.lowercased() {
+            if ["true", "yes", "y", "1", "是", "需要"].contains(value) {
+                return true
+            }
+            if ["false", "no", "n", "0", "否", "不需要"].contains(value) {
+                return false
+            }
+        }
+        if let value = try? decode(Double.self, forKey: key) {
+            return value != 0
+        }
+        return defaultValue
+    }
+
+    func decodeLossyDouble(forKey key: Key) -> Double? {
+        if (try? decodeNil(forKey: key)) == true {
+            return nil
+        }
+        if let value = try? decode(Double.self, forKey: key) {
+            return value
+        }
+        if let value = try? decode(Int.self, forKey: key) {
+            return Double(value)
+        }
+        guard let value = decodeLossyString(forKey: key) else {
+            return nil
+        }
+
+        let numeric = value
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: "kcal", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "千卡", with: "")
+            .replacingOccurrences(of: "大卡", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return Double(numeric)
+    }
+
+    func decodeLossyStringArray(forKey key: Key) -> [String]? {
+        if (try? decodeNil(forKey: key)) == true {
+            return nil
+        }
+        if let values = try? decode([String].self, forKey: key) {
+            return cleaned(values)
+        }
+        if let values = try? decode([Double].self, forKey: key) {
+            return cleaned(values.map { String($0) })
+        }
+        if let value = decodeLossyString(forKey: key) {
+            let separators = CharacterSet(charactersIn: "，,、;\n")
+            let values = value
+                .components(separatedBy: separators)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            return cleaned(values)
+        }
+        return nil
+    }
+
+    private func cleaned(_ values: [String]) -> [String]? {
+        let cleanedValues = values
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.isNullLiteral }
+        return cleanedValues.isEmpty ? nil : cleanedValues
+    }
+}
+
+private extension String {
+    var isNullLiteral: Bool {
+        let normalized = lowercased()
+        return normalized == "null" || normalized == "nil" || normalized == "none" || normalized == "无"
     }
 }
 

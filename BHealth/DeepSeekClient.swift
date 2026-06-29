@@ -43,11 +43,20 @@ struct DeepSeekClient {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
+            let apiMessage = DeepSeekAPIErrorMessage.extract(from: data)
+            let body = apiMessage ?? String(data: data, encoding: .utf8) ?? ""
             throw DeepSeekError.httpStatus(httpResponse.statusCode, body)
         }
 
-        let decoded = try JSONDecoder.deepSeekDecoder.decode(DeepSeekChatResponse.self, from: data)
+        let decoded: DeepSeekChatResponse
+        do {
+            decoded = try JSONDecoder.deepSeekDecoder.decode(DeepSeekChatResponse.self, from: data)
+        } catch {
+            let apiMessage = DeepSeekAPIErrorMessage.extract(from: data)
+            let body = apiMessage ?? String(data: data, encoding: .utf8) ?? ""
+            throw DeepSeekError.invalidResponseBody(body)
+        }
+
         guard let content = decoded.choices.first?.message.content, !content.isEmpty else {
             throw DeepSeekError.emptyResponse
         }
@@ -96,6 +105,7 @@ private struct DeepSeekChatResponse: Decodable {
 enum DeepSeekError: LocalizedError {
     case invalidURL
     case invalidResponse
+    case invalidResponseBody(String)
     case httpStatus(Int, String)
     case emptyResponse
 
@@ -105,6 +115,11 @@ enum DeepSeekError: LocalizedError {
             return AppText.text("DeepSeek API 地址无效。", "DeepSeek API URL is invalid.", language: language)
         case .invalidResponse:
             return AppText.text("DeepSeek API 返回格式无效。", "DeepSeek API returned an invalid response.", language: language)
+        case .invalidResponseBody(let body):
+            if body.isEmpty {
+                return AppText.text("DeepSeek API 返回格式无效。", "DeepSeek API returned an invalid response.", language: language)
+            }
+            return AppText.text("DeepSeek API 返回格式无效：\(body)", "DeepSeek API returned an invalid response: \(body)", language: language)
         case .httpStatus(let status, let body):
             if body.isEmpty {
                 return AppText.text("DeepSeek API 请求失败：HTTP \(status)。", "DeepSeek API request failed: HTTP \(status).", language: language)
@@ -117,6 +132,36 @@ enum DeepSeekError: LocalizedError {
 
     var errorDescription: String? {
         message(language: .chinese)
+    }
+}
+
+private enum DeepSeekAPIErrorMessage {
+    static func extract(from data: Data) -> String? {
+        if let response = try? JSONDecoder().decode(DeepSeekErrorResponse.self, from: data) {
+            return response.error.message.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        }
+        if let response = try? JSONDecoder().decode(DeepSeekFlatErrorResponse.self, from: data) {
+            return response.message.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        }
+        return nil
+    }
+}
+
+private struct DeepSeekErrorResponse: Decodable {
+    let error: APIError
+
+    struct APIError: Decodable {
+        let message: String
+    }
+}
+
+private struct DeepSeekFlatErrorResponse: Decodable {
+    let message: String
+}
+
+private extension String {
+    var nonEmpty: String? {
+        isEmpty ? nil : self
     }
 }
 
