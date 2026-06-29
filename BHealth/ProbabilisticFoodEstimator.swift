@@ -57,7 +57,7 @@ struct FoodConversationCoordinator {
 
             let questionText = selectedQuestions.map(\.text).joined(separator: "\n")
             return FoodAssistantTurnResult(
-                reply: "\(questionText)\n\n也可以说“不知道”或“直接估算”，我会用更宽的通用范围计算。",
+                reply: "\(questionText)\n\n如果你不确定，也可以说“不知道”或“直接估算”，我会按常见情况给一个大致范围。",
                 calculation: nil,
                 mealType: drafts.first?.mealType,
                 consumedAt: drafts.first?.consumedAt,
@@ -821,18 +821,18 @@ private struct CalorieMonteCarloEstimator {
     private func assumptions(for draft: FoodEventDraft) -> [EstimateAssumption] {
         var values: [String] = []
         if let grams = draft.exactWeightGrams {
-            values.append("按用户提供的 \(Int(grams.rounded()))g 做确定性计算。")
+            values.append("按你提供的 \(Int(grams.rounded()))g 估算。")
         } else {
-            values.append("未提供克重，使用通用份量先验，不使用个人历史。")
+            values.append("没有具体克重，按常见份量粗略估算。")
         }
         if let container = draft.containerClass, container != .unknown {
-            values.append("容器按\(container.displayName)的通用容量分布估算。")
+            values.append("份量按\(container.displayName)估算。")
         }
         if let fill = draft.fillLevel, fill != .unknown {
-            values.append("装满程度按\(fill.displayName)分布估算。")
+            values.append("装满程度按\(fill.displayName)估算。")
         }
         if let consistency = draft.consistencyClass, consistency != .unknown {
-            values.append("配方原型按\(consistency.displayName)估算。")
+            values.append("口感按\(consistency.displayName)估算。")
         }
         if draft.exclusions.contains(.noSugar) {
             values.append("用户说明未加糖。")
@@ -1100,8 +1100,8 @@ private struct MealExplanationBuilder {
 
         已用信息：\(mealType?.title ?? "餐别待确认")，\(consumedAt?.formatted(date: .abbreviated, time: .omitted) ?? "日期待确认")，\(calculation.foodDisplayName)
 
-        主要假设：
-        - \(assumptions.isEmpty ? "使用通用份量先验和配方原型。" : assumptions)
+        我先按这些信息理解：
+        - \(assumptions.isEmpty ? "按常见份量做粗略估算。" : assumptions)
 
         是否确认保存这次饮食记录？
         """

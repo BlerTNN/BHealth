@@ -278,7 +278,7 @@ final class FoodAssistantViewModel: ObservableObject {
         if let calculation {
             if mode == .historicalFoodLog, consumedAt == nil {
                 return """
-                我先用本地 USDA Foundation Foods 做了粗略计算，但 AI 回复暂时不可用：\(reason)
+                我先做了一个粗略估算，但现在暂时无法连接在线 AI：\(reason)
 
                 估计摄入：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
                 合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
@@ -289,7 +289,7 @@ final class FoodAssistantViewModel: ObservableObject {
 
             guard let mealType else {
                 return """
-                我先用本地 USDA Foundation Foods 做了粗略计算，但 AI 回复暂时不可用：\(reason)
+                我先做了一个粗略估算，但现在暂时无法连接在线 AI：\(reason)
 
                 估计摄入：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
                 合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
@@ -299,7 +299,7 @@ final class FoodAssistantViewModel: ObservableObject {
             }
 
             return """
-            我先用本地 USDA Foundation Foods 做了粗略计算，但 AI 回复暂时不可用：\(reason)
+            我先做了一个粗略估算，但现在暂时无法连接在线 AI：\(reason)
 
             估计摄入：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
             合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
@@ -314,7 +314,7 @@ final class FoodAssistantViewModel: ObservableObject {
         }
 
         return """
-        我现在还不能完成 AI 解析：\(reason)
+        我现在还不能完整理解这条记录：\(reason)
 
         你可以先补充更明确的信息，例如食物名称、数量或克重。比如：“鸡蛋 1 个，牛奶 250g”。
         """
@@ -394,7 +394,8 @@ struct FoodAssistantEngine {
         9. 历史数据添加模式必须确认日期；如果日期不明确，先追问日期，不要要求保存。相对日期要基于 current_date 转成 YYYY-MM-DD。
         10. food_items 只写具体食品或饮品名称，不要写整句聊天、请求语气或“帮我估算”。
         11. 如果模式是“健康助手”，提供通用建议、趋势判断、粗略减重估计，不要要求保存饮食记录，should_offer_save 必须为 false。
-        12. 输出严格 JSON，不要 Markdown，不要代码块。
+        12. 给用户看的 reply 不能提到 local_calculation_context、算法、程序计算、USDA、数据库、概率、先验、配方原型等实现细节；要像自然的 AI 助手一样追问和确认。
+        13. 输出严格 JSON，不要 Markdown，不要代码块。
 
         JSON schema:
         {

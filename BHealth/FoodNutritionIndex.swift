@@ -457,7 +457,7 @@ struct MealNutritionCalculator {
 
         for mention in mentions {
             guard let match = index.search(query: mention.query, limit: 1).first, match.score >= 3.0 else {
-                assumptions.insert("未能为“\(mention.rawText)”匹配到足够可靠的 USDA Foundation Food 条目。")
+                assumptions.insert("还没能可靠识别“\(mention.rawText)”，暂不把它计入估算。")
                 continue
             }
 
@@ -467,7 +467,7 @@ struct MealNutritionCalculator {
             let energy = nutrients.energyKcalPer100g * factor
             let confidence = confidenceLabel(for: match.score, quantity: quantity)
             let itemAssumptions = quantity.assumptions + [
-                "使用 \(match.item.description) 的每 100g 营养数据。"
+                "参考常见的 \(match.item.description) 营养信息估算。"
             ]
 
             itemAssumptions.forEach { assumptions.insert($0) }

@@ -1349,13 +1349,9 @@ private struct MealCalculationDraftCard: View {
                 }
             }
 
-            Text("来源：\(calculation.sourceSummary)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
             if !calculation.assumptions.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("主要假设")
+                    Text("估算依据")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
 

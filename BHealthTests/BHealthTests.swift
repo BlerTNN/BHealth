@@ -42,6 +42,22 @@ struct BHealthTests {
         #expect(result.reply.contains("稀稠度"))
     }
 
+    @Test func vagueMilletPorridgeAsksBeforeOfferingSave() async throws {
+        var session = FoodConversationSession()
+        let result = FoodConversationCoordinator().handle(
+            userText: "一碗小米粥",
+            mode: .foodLog,
+            session: &session,
+            referenceDate: Date(timeIntervalSince1970: 1_780_000_000)
+        )
+
+        #expect(!result.shouldOfferSave)
+        #expect(result.calculation == nil)
+        #expect(result.reply.contains("这是早餐"))
+        #expect(!result.reply.contains("通用范围"))
+        #expect(!result.reply.contains("算法"))
+    }
+
     @Test func directEstimateUsesWideProbabilisticRange() async throws {
         var session = FoodConversationSession()
         let result = FoodConversationCoordinator().handle(
@@ -54,7 +70,8 @@ struct BHealthTests {
         #expect(result.shouldOfferSave)
         let calculation = try #require(result.calculation)
         #expect(calculation.rangeHighKcal > calculation.rangeLowKcal)
-        #expect(calculation.assumptions.contains { $0.contains("通用份量先验") })
+        #expect(calculation.assumptions.contains { $0.contains("常见份量") })
+        #expect(!calculation.assumptions.contains { $0.contains("先验") || $0.contains("配方原型") })
     }
 
     @Test func multiFoodEstimateKeepsConcreteFoodItems() async throws {
