@@ -101,22 +101,6 @@ enum AssistantMode: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-struct LocalAlgorithmFallbackRequest: Identifiable, Hashable {
-    let id = UUID()
-    let userText: String
-    let mode: AssistantMode
-    let reason: String
-    let referenceDate: Date
-
-    func message(language: AppLanguage) -> String {
-        AppText.text(
-            "当前 API 不可用：\(reason)\n\n是否改用本地算法做粗略估算？本地算法会尽量根据已提供信息计算，但准确性会低一些。",
-            "The API is currently unavailable: \(reason)\n\nUse the local estimator for a rough estimate instead? It will use the details you provided, but accuracy may be lower.",
-            language: language
-        )
-    }
-}
-
 @MainActor
 final class FoodAssistantViewModel: ObservableObject {
     @Published var draftMessage = ""
@@ -126,26 +110,24 @@ final class FoodAssistantViewModel: ObservableObject {
     @Published var pendingCalculation: MealCalculationResult?
     @Published var pendingMealType: MealType?
     @Published var pendingConsumedAt: Date?
-    @Published var localAlgorithmFallbackRequest: LocalAlgorithmFallbackRequest?
     @Published var selectedMode: AssistantMode?
     @Published private(set) var savedRecords: [SavedMealRecord]
 
     private let apiKeyStore: KeychainAPIKeyStore
     private let engine: FoodAssistantEngine
-    private let probabilisticCoordinator: FoodConversationCoordinator
+    private let calculator: MealNutritionCalculator
     private let recordStore: MealRecordLocalStore
-    private var probabilisticSession = FoodConversationSession()
     private var language: AppLanguage = .chinese
 
     init() {
         let apiKeyStore = KeychainAPIKeyStore.shared
         let engine = FoodAssistantEngine()
-        let probabilisticCoordinator = FoodConversationCoordinator()
+        let calculator = MealNutritionCalculator()
         let recordStore = MealRecordLocalStore()
 
         self.apiKeyStore = apiKeyStore
         self.engine = engine
-        self.probabilisticCoordinator = probabilisticCoordinator
+        self.calculator = calculator
         self.recordStore = recordStore
         self.hasAPIKey = apiKeyStore.hasAPIKey
         self.savedRecords = recordStore.load()
@@ -169,8 +151,6 @@ final class FoodAssistantViewModel: ObservableObject {
         pendingCalculation = nil
         pendingMealType = nil
         pendingConsumedAt = nil
-        localAlgorithmFallbackRequest = nil
-        probabilisticSession = FoodConversationSession()
         messages = [
             AssistantMessage(text: mode.welcomeMessage(language: self.language), isFromUser: false)
         ]
@@ -184,9 +164,7 @@ final class FoodAssistantViewModel: ObservableObject {
         pendingCalculation = nil
         pendingMealType = nil
         pendingConsumedAt = nil
-        localAlgorithmFallbackRequest = nil
         draftMessage = ""
-        probabilisticSession = FoodConversationSession()
         messages = AssistantMessage.sample(language: self.language)
     }
 
@@ -204,22 +182,27 @@ final class FoodAssistantViewModel: ObservableObject {
         isSending = true
         pendingCalculation = nil
         pendingMealType = nil
-        pendingConsumedAt = nil
-        localAlgorithmFallbackRequest = nil
         defer { isSending = false }
 
         let mode = selectedMode ?? .healthCoach
         let referenceDate = Date()
+        let calculation = mode.supportsMealSaving ? calculator.calculate(from: text, language: language) : nil
         let detectedMealType = mode.supportsMealSaving ? MealType.detected(in: text) : nil
         let detectedConsumedAt = consumedAtCandidate(for: mode, text: text, referenceDate: referenceDate)
 
         guard hasAPIKey else {
-            handleAPIUnavailable(
-                userText: text,
+            let reply = localFallbackReply(
+                for: text,
+                calculation: calculation,
+                mealType: detectedMealType,
+                consumedAt: detectedConsumedAt,
                 mode: mode,
-                reason: AppText.text("还没有保存 DeepSeek API key。", "No DeepSeek API key has been saved.", language: language),
-                referenceDate: referenceDate
+                reason: AppText.text("还没有保存 DeepSeek API key。", "No DeepSeek API key has been saved.", language: language)
             )
+            messages.append(AssistantMessage(text: reply, isFromUser: false))
+            pendingMealType = detectedMealType
+            pendingConsumedAt = detectedConsumedAt
+            pendingCalculation = mode.supportsMealSaving && detectedMealType != nil && detectedConsumedAt != nil ? calculation : nil
             return
         }
 
@@ -227,7 +210,7 @@ final class FoodAssistantViewModel: ObservableObject {
             let aiReply = try await engine.respond(
                 userText: text,
                 history: messages,
-                calculation: nil,
+                calculation: calculation,
                 mode: mode,
                 mealType: detectedMealType,
                 consumedAt: detectedConsumedAt,
@@ -240,288 +223,24 @@ final class FoodAssistantViewModel: ObservableObject {
             let resolvedMealType = aiReply.mealType ?? detectedMealType
             let resolvedConsumedAt = consumedAtCandidate(for: mode, aiReply: aiReply, detectedDate: detectedConsumedAt, referenceDate: referenceDate)
             if mode.supportsMealSaving, aiReply.shouldOfferSave, let resolvedMealType, let resolvedConsumedAt {
-                await applyLocalCalculationAfterAI(
-                    userText: text,
-                    aiReply: aiReply,
-                    mode: mode,
-                    mealType: resolvedMealType,
-                    consumedAt: resolvedConsumedAt,
-                    referenceDate: referenceDate
-                )
+                pendingMealType = resolvedMealType
+                pendingConsumedAt = resolvedConsumedAt
+                pendingCalculation = aiReply.estimatedCalculation(for: text, language: language) ?? calculation
             }
         } catch {
-            handleAPIUnavailable(
-                userText: text,
+            let reply = localFallbackReply(
+                for: text,
+                calculation: calculation,
+                mealType: detectedMealType,
+                consumedAt: detectedConsumedAt,
                 mode: mode,
-                reason: assistantErrorMessage(error, language: language),
-                referenceDate: referenceDate
+                reason: error.localizedDescription
             )
+            messages.append(AssistantMessage(text: reply, isFromUser: false))
+            pendingMealType = detectedMealType
+            pendingConsumedAt = detectedConsumedAt
+            pendingCalculation = mode.supportsMealSaving && detectedMealType != nil && detectedConsumedAt != nil ? calculation : nil
         }
-    }
-
-    private func assistantErrorMessage(_ error: Error, language: AppLanguage) -> String {
-        if let error = error as? DeepSeekError {
-            return error.message(language: language)
-        }
-        if let error = error as? KeychainError {
-            return error.message(language: language)
-        }
-        if let error = error as? AssistantAIReplyError {
-            return error.message(language: language)
-        }
-        return error.localizedDescription
-    }
-
-    private func handleAPIUnavailable(
-        userText: String,
-        mode: AssistantMode,
-        reason: String,
-        referenceDate: Date
-    ) {
-        if mode.supportsMealSaving, FeatureFlags.probabilisticFoodEstimation {
-            localAlgorithmFallbackRequest = LocalAlgorithmFallbackRequest(
-                userText: userText,
-                mode: mode,
-                reason: reason,
-                referenceDate: referenceDate
-            )
-            return
-        }
-
-        messages.append(
-            AssistantMessage(
-                text: AppText.text(
-                    "当前 API 不可用：\(reason)\n\n请稍后重试，或到“我的”里检查 DeepSeek API key。",
-                    "The API is currently unavailable: \(reason)\n\nPlease try again later, or check your DeepSeek API key in Me.",
-                    language: language
-                ),
-                isFromUser: false
-            )
-        )
-    }
-
-    func runLocalAlgorithmFallback(_ request: LocalAlgorithmFallbackRequest) {
-        localAlgorithmFallbackRequest = nil
-        let result = localCalculationResult(
-            userText: request.userText,
-            aiReply: nil,
-            mode: request.mode,
-            mealType: nil,
-            referenceDate: request.referenceDate,
-            forceQuickEstimate: false
-        )
-        messages.append(AssistantMessage(text: result.reply, isFromUser: false))
-        applyPendingCalculationIfAvailable(result)
-    }
-
-    func cancelLocalAlgorithmFallback() {
-        localAlgorithmFallbackRequest = nil
-        messages.append(
-            AssistantMessage(
-                text: AppText.text(
-                    "已取消本地算法估算。你可以稍后重试，或到“我的”里检查 API key。",
-                    "Local estimation was canceled. You can try again later or check your API key in Me.",
-                    language: language
-                ),
-                isFromUser: false
-            )
-        )
-    }
-
-    private func applyLocalCalculationAfterAI(
-        userText: String,
-        aiReply: AssistantAIReply,
-        mode: AssistantMode,
-        mealType: MealType,
-        consumedAt: Date,
-        referenceDate: Date
-    ) async {
-        let result = localCalculationResult(
-            userText: userText,
-            aiReply: aiReply,
-            mode: mode,
-            mealType: mealType,
-            referenceDate: referenceDate,
-            forceQuickEstimate: true
-        )
-
-        guard let calculation = result.calculation else {
-            messages.append(
-                AssistantMessage(
-                    text: AppText.text(
-                        "我已经理解这条记录，但还不能可靠估算这个食物的热量。请再补充一个更常见的食物名称、克重或主要配料。",
-                        "I understand this record, but I still cannot estimate this food reliably yet. Please add a more common food name, weight, or main ingredients.",
-                        language: language
-                    ),
-                    isFromUser: false
-                )
-            )
-            return
-        }
-
-        guard let reviewedCalculation = await sanityCheckedCalculation(
-            localCalculation: calculation,
-            userText: userText,
-            aiReply: aiReply,
-            mode: mode,
-            mealType: mealType,
-            consumedAt: consumedAt
-        ) else {
-            return
-        }
-
-        pendingMealType = mealType
-        pendingConsumedAt = consumedAt
-        pendingCalculation = reviewedCalculation
-    }
-
-    private func sanityCheckedCalculation(
-        localCalculation: MealCalculationResult,
-        userText: String,
-        aiReply: AssistantAIReply,
-        mode: AssistantMode,
-        mealType: MealType,
-        consumedAt: Date
-    ) async -> MealCalculationResult? {
-        do {
-            let review = try await engine.reviewEstimate(
-                userText: userText,
-                aiReply: aiReply,
-                calculation: localCalculation,
-                mode: mode,
-                mealType: mealType,
-                consumedAt: consumedAt,
-                language: language
-            )
-            return review.correctedCalculation(
-                fallback: localCalculation,
-                userText: calculationFoodText(userText: userText, aiReply: aiReply),
-                language: language
-            ) ?? localCalculation
-        } catch {
-            if error is DeepSeekError || error is KeychainError {
-                handleAPIUnavailable(
-                    userText: userText,
-                    mode: mode,
-                    reason: assistantErrorMessage(error, language: language),
-                    referenceDate: Date()
-                )
-                return nil
-            }
-
-            if EstimatePlausibility.isCounterintuitive(calculation: localCalculation, userText: userText) {
-                messages.append(
-                    AssistantMessage(
-                        text: AppText.text(
-                            "我已经理解这条记录，但最终常识校验暂时失败。为了避免显示明显不可靠的热量，请稍后重试，或补充更明确的份量后再发送。",
-                            "I understood this record, but the final common-sense check failed. To avoid showing a clearly unreliable calorie estimate, please try again later or add a clearer portion.",
-                            language: language
-                        ),
-                        isFromUser: false
-                    )
-                )
-                return nil
-            }
-            return localCalculation
-        }
-    }
-
-    private func localCalculationResult(
-        userText: String,
-        aiReply: AssistantAIReply?,
-        mode: AssistantMode,
-        mealType: MealType?,
-        referenceDate: Date,
-        forceQuickEstimate: Bool
-    ) -> FoodAssistantTurnResult {
-        let localInput = localCalculationInput(
-            userText: userText,
-            aiReply: aiReply,
-            mealType: mealType,
-            forceQuickEstimate: forceQuickEstimate
-        )
-
-        var session = FoodConversationSession()
-        return probabilisticCoordinator.handle(
-            userText: localInput,
-            mode: mode,
-            session: &session,
-            referenceDate: referenceDate,
-            language: language
-        )
-    }
-
-    private func localCalculationInput(
-        userText: String,
-        aiReply: AssistantAIReply?,
-        mealType: MealType?,
-        forceQuickEstimate: Bool
-    ) -> String {
-        var parts: [String] = []
-        if let mealType {
-            parts.append(mealType.title(language: .chinese))
-        }
-        parts.append(calculationFoodText(userText: userText, aiReply: aiReply))
-        if forceQuickEstimate {
-            parts.append("不知道细节，直接估算")
-        }
-        return parts.joined(separator: "，")
-    }
-
-    private func calculationFoodText(userText: String, aiReply: AssistantAIReply?) -> String {
-        if let normalized = aiReply?.normalizedFoodText,
-           !normalized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let cleaned = cleanedCalculationText(normalized)
-            if !cleaned.isEmpty {
-                return cleaned
-            }
-        }
-
-        let itemText = (aiReply?.foodItems ?? [])
-            .map(cleanedCalculationText)
-            .filter { !$0.isEmpty }
-            .joined(separator: "，")
-        if !itemText.isEmpty {
-            return itemText
-        }
-
-        return cleanedCalculationText(userText)
-    }
-
-    private func cleanedCalculationText(_ value: String) -> String {
-        var text = MealFoodNameFormatter.cleaned(value)
-        let patterns = [
-            #"\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2}"#,
-            #"\d{1,2}月\d{1,2}[日号]?"#,
-            #"\d+(?:\.\d+)?\s*(?:kcal|千卡|大卡|卡路里)"#,
-            #"(?:已记录|待确认记录|待确认|请确认是否正确|请确认|如果正确|系统将估算热量并保存|系统将|保存记录|已保存)"#
-        ]
-
-        for pattern in patterns {
-            text = Self.replacingMatches(in: text, pattern: pattern, with: "")
-        }
-
-        return text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
-    }
-
-    private func applyPendingCalculationIfAvailable(_ result: FoodAssistantTurnResult) {
-        guard result.shouldOfferSave,
-              let calculation = result.calculation,
-              let mealType = result.mealType,
-              let consumedAt = result.consumedAt else {
-            return
-        }
-        pendingMealType = mealType
-        pendingConsumedAt = consumedAt
-        pendingCalculation = calculation
-    }
-
-    private static func replacingMatches(in text: String, pattern: String, with replacement: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return text
-        }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: replacement)
     }
 
     func savePendingCalculation() {
@@ -553,10 +272,107 @@ final class FoodAssistantViewModel: ObservableObject {
         )
     }
 
+    private func localFallbackReply(
+        for text: String,
+        calculation: MealCalculationResult?,
+        mealType: MealType?,
+        consumedAt: Date?,
+        mode: AssistantMode,
+        reason: String
+    ) -> String {
+        if let calculation {
+            if mode == .historicalFoodLog, consumedAt == nil {
+                return AppText.text(
+                    """
+                    AI 回复暂时不可用：\(reason)
+
+                    我先用本地食物库做了粗略参考：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
+                    合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+
+                    这条历史记录是哪一天？你可以说“昨天”“前天”或具体日期。
+                    """,
+                    """
+                    The AI reply is temporarily unavailable: \(reason)
+
+                    I made a rough local reference estimate: about \(Int(calculation.totalEnergyKcal.rounded())) kcal
+                    Likely range: \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+
+                    Which day is this past record for? You can say "yesterday", "the day before yesterday", or a specific date.
+                    """,
+                    language: language
+                )
+            }
+
+            guard let mealType else {
+                return AppText.text(
+                    """
+                    AI 回复暂时不可用：\(reason)
+
+                    我先用本地食物库做了粗略参考：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
+                    合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+
+                    这是早餐、午餐、晚餐、下午茶、加餐/零食还是夜宵？
+                    """,
+                    """
+                    The AI reply is temporarily unavailable: \(reason)
+
+                    I made a rough local reference estimate: about \(Int(calculation.totalEnergyKcal.rounded())) kcal
+                    Likely range: \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+
+                    Was this breakfast, lunch, dinner, afternoon tea, a snack, or late-night food?
+                    """,
+                    language: language
+                )
+            }
+
+            return AppText.text(
+                """
+                AI 回复暂时不可用：\(reason)
+
+                我先用本地食物库做了粗略参考：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
+                合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+                可信度：\(calculation.confidence == "low" ? "较低" : "中等")
+                日期：\(consumedAt.map { AppText.shortDate($0, language: language) } ?? "今天")
+                餐别：\(mealType.title(language: language))
+
+                食品：\(calculation.foodDisplayName)
+                是否确认保存这次饮食记录？
+                """,
+                """
+                The AI reply is temporarily unavailable: \(reason)
+
+                I made a rough local reference estimate: about \(Int(calculation.totalEnergyKcal.rounded())) kcal
+                Likely range: \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+                Confidence: \(calculation.confidence == "low" ? "low" : "medium")
+                Date: \(consumedAt.map { AppText.shortDate($0, language: language) } ?? "today")
+                Meal: \(mealType.title(language: language))
+
+                Food: \(calculation.foodDisplayName)
+                Confirm saving this meal record?
+                """,
+                language: language
+            )
+        }
+
+        return AppText.text(
+            """
+            我现在还不能完成 AI 解析：\(reason)
+
+            你可以先补充更明确的信息，例如食物名称、数量或克重。比如：“鸡蛋 1 个，牛奶 250g”。
+            """,
+            """
+            I cannot complete the AI parsing right now: \(reason)
+
+            You can add clearer details first, such as the food name, quantity, or weight. For example: "1 egg, 250g milk".
+            """,
+            language: language
+        )
+    }
+
     private func consumedAtCandidate(for mode: AssistantMode, text: String, referenceDate: Date) -> Date? {
         switch mode {
         case .foodLog:
-            return MealDateResolver.detectedDate(in: text, referenceDate: referenceDate) ?? Calendar.current.startOfDay(for: referenceDate)
+            return Calendar.current.startOfDay(for: referenceDate)
         case .historicalFoodLog:
             return MealDateResolver.detectedDate(in: text, referenceDate: referenceDate)
         case .healthCoach:
@@ -572,7 +388,7 @@ final class FoodAssistantViewModel: ObservableObject {
     ) -> Date? {
         switch mode {
         case .foodLog:
-            return aiReply.consumedAt(referenceDate: referenceDate) ?? detectedDate ?? Calendar.current.startOfDay(for: referenceDate)
+            return Calendar.current.startOfDay(for: referenceDate)
         case .historicalFoodLog:
             return aiReply.consumedAt(referenceDate: referenceDate) ?? detectedDate
         case .healthCoach:
@@ -618,21 +434,19 @@ struct FoodAssistantEngine {
         let responseLanguage = language.aiInstructionName
         let systemPrompt = """
         你是 BHealth 的 AI 饮食热量记录助手。必须遵守：
-        1. AI 负责理解自然语言、追问缺失信息、整理食物、份量、餐别和日期；最终 kcal 会由 App 的本地计算器根据你的结构化理解再计算。
-        2. local_calculation_context 只提供会话和日期背景；不要假装它已经完成热量计算。
-        3. 如果食物复杂或信息模糊，你应先追问最影响结果的 1-2 个问题；如果用户说不知道或直接估算，可以标记为可估算。
+        1. AI 负责理解自然语言、追问缺失信息、参考食物库证据、进行有标注的粗略推理，并解释结果。
+        2. local_calculation_context 中的 calculation 是本地 USDA 食物库和程序计算结果，只作为参考证据，不是唯一来源。
+        3. 如果本地食物库没有覆盖用户食物，你可以基于常识做低可信度估算，但必须明确标注“AI 推理估算/低可信度”，不要伪装成权威数据。
         4. 不要编造品牌官方菜单、包装标签或来源版本；品牌食品缺少官方资料时要说明。
-        5. 每次最多追问 1-2 个最影响结果的信息。如果信息已足够，回复应说明你理解成了什么，并让用户查看下方估算确认。
-        6. 只有用户明确确认后才能保存记录。你现在只能建议用户确认，不能声称已经保存；reply 里不要写“已记录”“已保存”。
-        7. 不要在 reply 里直接给 kcal 数字；estimated_energy_kcal、energy_low_kcal、energy_high_kcal 填 null。
-        8. 记录饮食/历史数据添加模式必须确认餐别；“早上/中午/晚上/今晚/昨晚”等自然表达可以分别理解为早餐/午餐/晚餐。如果用户没有说明早餐、午餐、晚餐、下午茶、加餐/零食或夜宵，先追问餐别，不要要求保存。
+        5. 每次最多追问 1-2 个最影响结果的信息。如果信息已足够，可以给区间估算。
+        6. 只有用户明确确认后才能保存记录。你现在只能建议用户确认，不能声称已经保存。
+        7. 不要输出伪精确热量，优先使用整数和范围。
+        8. 记录饮食/历史数据添加模式必须确认餐别；如果用户没有说明早餐、午餐、晚餐、下午茶、加餐/零食或夜宵，先追问餐别，不要要求保存。
         9. 历史数据添加模式必须确认日期；如果日期不明确，先追问日期，不要要求保存。相对日期要基于 current_date 转成 YYYY-MM-DD。
         10. food_items 只写具体食品或饮品名称，不要写整句聊天、请求语气或“帮我估算”。
         11. 如果模式是“健康助手”，提供通用建议、趋势判断、粗略减重估计，不要要求保存饮食记录，should_offer_save 必须为 false。
-        12. normalized_food_text 是给本地计算器使用的隐藏字段，优先用简体中文，保留食物名称、数量、容器、稀稠度、配料、吃完比例等关键信息，不要包含日期、餐别、kcal、聊天语气、确认话术；信息不足时填 null。
-        13. 给用户看的 reply 不能提到 local_calculation_context、算法、程序计算、USDA、数据库、概率、先验、配方原型等实现细节；要像自然的 AI 助手一样追问和确认。
-        14. reply、assumptions、source_summary 必须使用 \(responseLanguage)。如果用户输入是另一种语言，也要优先服从这个 App 语言设置。
-        15. 输出严格 JSON，不要 Markdown，不要代码块。reply 必须是非空字符串，should_offer_save 必须是 JSON boolean，不要写成字符串。
+        12. reply、assumptions、source_summary 必须使用 \(responseLanguage)。如果用户输入是另一种语言，也要优先服从这个 App 语言设置。
+        13. 输出严格 JSON，不要 Markdown，不要代码块。reply 必须是非空字符串，should_offer_save 必须是 JSON boolean，不要写成字符串。
 
         JSON schema:
         {
@@ -640,13 +454,12 @@ struct FoodAssistantEngine {
           "assistant_state": "collecting|calculating|confirming|low_confidence|needs_source",
           "confidence": "high|medium|low|none",
           "should_offer_save": true,
-          "estimated_energy_kcal": null,
-          "energy_low_kcal": null,
-          "energy_high_kcal": null,
+          "estimated_energy_kcal": 430,
+          "energy_low_kcal": 370,
+          "energy_high_kcal": 500,
           "meal_type": "breakfast|lunch|dinner|afternoon_tea|snack|late_night|other|null",
           "consumed_at": "YYYY-MM-DD|null",
           "food_items": ["鸡蛋", "拿铁", "吐司"],
-          "normalized_food_text": "早餐 一碗偏稠小米粥 无糖|null",
           "assumptions": ["用于保存快照的关键假设，使用 \(responseLanguage)"],
           "source_summary": "来源摘要，使用 \(responseLanguage)"
         }
@@ -664,11 +477,11 @@ struct FoodAssistantEngine {
         - 如果是历史数据添加且用户没有明确日期，先追问“这条记录是哪一天？”，consumed_at=null，should_offer_save=false。
         - 如果已经明确餐别，把 meal_type 和 consumed_at 纳入回复。meal_type 只能使用 breakfast/lunch/dinner/afternoon_tea/snack/late_night/other，consumed_at 只能使用 YYYY-MM-DD 或 null。
         - 如果是记录饮食，consumed_at 默认使用 current_date 的日期；但用户明确说“昨天/昨晚/前天”等相对日期时，要基于 current_date 转成对应日期。
-        - 不要自己直接输出最终 kcal；如果用户描述足够可估算，把 should_offer_save 设为 true，并填写 normalized_food_text，App 会在你回复后计算。
-        - 如果用户描述足够但份量仍不精确，normalized_food_text 可以保留“普通碗/一份/不知道细节/直接估算”等信息。
+        - 如果有 calculation，把它作为参考证据，结合用户描述判断是否需要修正或补充。
+        - 如果没有 calculation，但用户描述足够可估算，可以给低可信度区间估算，并填写 estimated_energy_kcal / energy_low_kcal / energy_high_kcal。
         - 信息不足时追问食物、份量、克重、品牌/地区或配料中最关键的 1-2 项。
         - food_items 中只放食品名称，例如 ["鸡蛋", "牛奶"]，不要放“我吃了”“补录昨天”等对话文本。
-        - 只有食物信息、餐别和必要日期都明确时，才可以询问“请查看下方估算并确认”，并把 should_offer_save 设为 true。不要说“已记录”或“已保存”。
+        - 只有食物信息、餐别和必要日期都明确时，才可以询问“是否确认保存”，并把 should_offer_save 设为 true。
         如果是健康助手：
         - 使用 dashboard_context 总结用户近况。
         - 可以估算热量缺口对应的大概体重变化，但必须说明只是粗略推断。
@@ -681,70 +494,6 @@ struct FoodAssistantEngine {
 
         let content = try await client.complete(messages: messages)
         return AssistantAIReply.parseOrFallback(from: content, language: language)
-    }
-
-    func reviewEstimate(
-        userText: String,
-        aiReply: AssistantAIReply,
-        calculation: MealCalculationResult,
-        mode: AssistantMode,
-        mealType: MealType,
-        consumedAt: Date,
-        language: AppLanguage
-    ) async throws -> CalorieSanityReview {
-        let context = SanityReviewContext(
-            originalUserText: userText,
-            aiReply: aiReply,
-            localCalculation: calculation,
-            mode: mode.title(language: language),
-            mealType: mealType.title(language: language),
-            consumedAt: consumedAt,
-            appLanguage: language.aiInstructionName
-        )
-        let contextData = try JSONEncoder.promptEncoder.encode(context)
-        let contextJSON = String(data: contextData, encoding: .utf8) ?? "{}"
-        let responseLanguage = language.aiInstructionName
-
-        let systemPrompt = """
-        你是 BHealth 在展示结果前的最终热量常识校验员。必须遵守：
-        1. 输入里有用户原话、AI 对自然语言的理解、本地估算结果。你的任务是判断这个估算在常识上是否明显离谱。
-        2. 只有“特别反常识”才覆盖，比如一份普通饭碗/一碗/一份单人餐被估到 1500 kcal 以上，且用户没有说超大份、很多油、很多酱、多份、吃撑或多种额外高热量食物。
-        3. 如果本地估算只是粗略但仍可能成立，should_override=false。
-        4. 如果应该覆盖，请根据用户原话重新给出 corrected_energy_kcal、corrected_low_kcal、corrected_high_kcal。使用常见单人份经验和食物组成推理，不要机械累加配料为多份主菜。
-        5. 例子：普通饭碗量的三文鱼、紫薯、糙米能量碗，少量鹰嘴豆和紫薯泥，通常约 450-700 kcal，不应是几千 kcal。
-        6. food_items 只写用户实际吃的食品/菜品名称，不要写日期、餐别、kcal、确认话术或算法过程。
-        7. assumptions、source_summary、reply_adjustment 必须使用 \(responseLanguage)。不要提到算法、数据库、概率、先验、蒙特卡洛或程序实现。
-        8. 输出严格 JSON，不要 Markdown，不要代码块。
-
-        JSON schema:
-        {
-          "should_override": false,
-          "corrected_energy_kcal": null,
-          "corrected_low_kcal": null,
-          "corrected_high_kcal": null,
-          "confidence": "high|medium|low",
-          "food_items": ["三文鱼紫薯糙米能量碗"],
-          "assumptions": ["按普通单人份饭碗估算"],
-          "source_summary": "常见单人份经验估算",
-          "reply_adjustment": "可选，给用户看的简短修正说明"
-        }
-        """
-
-        let userPrompt = """
-        sanity_review_context:
-        \(contextJSON)
-
-        请在结果展示给用户前做常识校验。App 当前语言是：\(responseLanguage)。
-        """
-
-        let content = try await client.complete(
-            messages: [
-                DeepSeekMessage(role: "system", content: systemPrompt),
-                DeepSeekMessage(role: "user", content: userPrompt)
-            ],
-            temperature: 0
-        )
-        return try CalorieSanityReview.parse(from: content)
     }
 }
 
@@ -759,7 +508,6 @@ struct AssistantAIReply: Codable, Hashable {
     let mealTypeRaw: String?
     let consumedAtRaw: String?
     let foodItems: [String]?
-    let normalizedFoodText: String?
     let assumptions: [String]?
     let sourceSummary: String?
 
@@ -782,7 +530,6 @@ struct AssistantAIReply: Codable, Hashable {
         case mealTypeRaw = "meal_type"
         case consumedAtRaw = "consumed_at"
         case foodItems = "food_items"
-        case normalizedFoodText = "normalized_food_text"
         case assumptions
         case sourceSummary = "source_summary"
     }
@@ -798,7 +545,6 @@ struct AssistantAIReply: Codable, Hashable {
         mealTypeRaw: String? = nil,
         consumedAtRaw: String? = nil,
         foodItems: [String]? = nil,
-        normalizedFoodText: String? = nil,
         assumptions: [String]? = nil,
         sourceSummary: String? = nil
     ) {
@@ -812,7 +558,6 @@ struct AssistantAIReply: Codable, Hashable {
         self.mealTypeRaw = mealTypeRaw
         self.consumedAtRaw = consumedAtRaw
         self.foodItems = foodItems
-        self.normalizedFoodText = normalizedFoodText
         self.assumptions = assumptions
         self.sourceSummary = sourceSummary
     }
@@ -829,7 +574,6 @@ struct AssistantAIReply: Codable, Hashable {
         mealTypeRaw = container.decodeLossyString(forKey: .mealTypeRaw)
         consumedAtRaw = container.decodeLossyString(forKey: .consumedAtRaw)
         foodItems = container.decodeLossyStringArray(forKey: .foodItems)
-        normalizedFoodText = container.decodeLossyString(forKey: .normalizedFoodText)
         assumptions = container.decodeLossyStringArray(forKey: .assumptions)
         sourceSummary = container.decodeLossyString(forKey: .sourceSummary)
     }
@@ -899,129 +643,15 @@ struct AssistantAIReply: Codable, Hashable {
     }
 }
 
-struct CalorieSanityReview: Codable, Hashable {
-    let shouldOverride: Bool
-    let correctedEnergyKcal: Double?
-    let correctedLowKcal: Double?
-    let correctedHighKcal: Double?
-    let confidence: String?
-    let foodItems: [String]?
-    let assumptions: [String]?
-    let sourceSummary: String?
-    let replyAdjustment: String?
+enum AssistantAIReplyError: LocalizedError {
+    case invalidEncoding
 
-    enum CodingKeys: String, CodingKey {
-        case shouldOverride = "should_override"
-        case correctedEnergyKcal = "corrected_energy_kcal"
-        case correctedLowKcal = "corrected_low_kcal"
-        case correctedHighKcal = "corrected_high_kcal"
-        case confidence
-        case foodItems = "food_items"
-        case assumptions
-        case sourceSummary = "source_summary"
-        case replyAdjustment = "reply_adjustment"
+    func message(language: AppLanguage) -> String {
+        AppText.text("AI 回复无法解析。", "The AI response could not be parsed.", language: language)
     }
 
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        shouldOverride = container.decodeLossyBool(forKey: .shouldOverride, defaultValue: false)
-        correctedEnergyKcal = container.decodeLossyDouble(forKey: .correctedEnergyKcal)
-        correctedLowKcal = container.decodeLossyDouble(forKey: .correctedLowKcal)
-        correctedHighKcal = container.decodeLossyDouble(forKey: .correctedHighKcal)
-        confidence = container.decodeLossyString(forKey: .confidence)
-        foodItems = container.decodeLossyStringArray(forKey: .foodItems)
-        assumptions = container.decodeLossyStringArray(forKey: .assumptions)
-        sourceSummary = container.decodeLossyString(forKey: .sourceSummary)
-        replyAdjustment = container.decodeLossyString(forKey: .replyAdjustment)
-    }
-
-    static func parse(from content: String) throws -> CalorieSanityReview {
-        let data = try AssistantJSONPayload.data(from: content)
-        return try JSONDecoder().decode(CalorieSanityReview.self, from: data)
-    }
-
-    func correctedCalculation(
-        fallback: MealCalculationResult,
-        userText: String,
-        language: AppLanguage
-    ) -> MealCalculationResult? {
-        guard shouldOverride,
-              let correctedEnergyKcal,
-              correctedEnergyKcal > 0 else {
-            return nil
-        }
-
-        let lowCandidate = correctedLowKcal ?? correctedEnergyKcal * 0.75
-        let highCandidate = correctedHighKcal ?? correctedEnergyKcal * 1.25
-        let low = max(0, min(lowCandidate, correctedEnergyKcal, highCandidate))
-        let high = max(lowCandidate, correctedEnergyKcal, highCandidate)
-        let normalizedConfidence = CalorieSanityReview.normalizedConfidence(confidence)
-        let displayName = MealFoodNameFormatter.displayName(from: foodItems, fallback: fallback.foodDisplayName)
-        let visibleName = displayName.isEmpty ? MealFoodNameFormatter.cleaned(userText) : displayName
-        let correctedAssumptions = CalorieSanityReview.cleanedList(assumptions)
-        let finalAssumptions = correctedAssumptions.isEmpty
-            ? [AppText.text("按用户描述和常见单人份量做最终校验后估算。", "Estimated after a final common-sense check against the described single serving.", language: language)]
-            : correctedAssumptions
-        let source = sourceSummary?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            ? sourceSummary!.trimmingCharacters(in: .whitespacesAndNewlines)
-            : AppText.text("常见单人份经验估算", "Common single-serving estimate", language: language)
-
-        let item = MealItemCalculation(
-            rawText: visibleName,
-            matchedFoodName: visibleName,
-            fdcId: -2,
-            estimatedGrams: fallback.items.map(\.estimatedGrams).reduce(0, +),
-            energyKcal: correctedEnergyKcal,
-            proteinG: nil,
-            fatG: nil,
-            carbohydrateG: nil,
-            confidence: normalizedConfidence,
-            sourceName: source,
-            sourceVersion: "ai_sanity_review_v1",
-            assumptions: finalAssumptions
-        )
-
-        return MealCalculationResult(
-            items: [item],
-            totalEnergyKcal: correctedEnergyKcal,
-            rangeLowKcal: low,
-            rangeHighKcal: high,
-            confidence: normalizedConfidence,
-            assumptions: finalAssumptions,
-            sourceSummary: source
-        )
-    }
-
-    private static func normalizedConfidence(_ value: String?) -> String {
-        switch value?.lowercased() {
-        case "high", "medium":
-            return "medium"
-        default:
-            return "low"
-        }
-    }
-
-    private static func cleanedList(_ values: [String]?) -> [String] {
-        (values ?? [])
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-}
-
-private enum EstimatePlausibility {
-    static func isCounterintuitive(calculation: MealCalculationResult, userText: String) -> Bool {
-        let normalized = userText
-            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: .current)
-            .lowercased()
-        let singleServingSignals = [
-            "一碗", "普通碗", "饭碗", "一份", "普通份", "单人", "one bowl", "regular bowl", "one serving"
-        ]
-        let multipleSignals = ["两份", "三份", "多份", "很多油", "重油", "很多酱", "double", "large", "extra large"]
-        let seemsSingleServing = singleServingSignals.contains { normalized.contains($0) }
-        let explicitlyLarge = multipleSignals.contains { normalized.contains($0) }
-
-        guard seemsSingleServing, !explicitlyLarge else { return false }
-        return calculation.totalEnergyKcal > 1_500 || calculation.rangeHighKcal > 2_000
+    var errorDescription: String? {
+        message(language: .chinese)
     }
 }
 
@@ -1299,18 +929,6 @@ private extension String {
     }
 }
 
-enum AssistantAIReplyError: LocalizedError {
-    case invalidEncoding
-
-    func message(language: AppLanguage) -> String {
-        AppText.text("AI 回复无法解析。", "The AI response could not be parsed.", language: language)
-    }
-
-    var errorDescription: String? {
-        message(language: .chinese)
-    }
-}
-
 enum MealDateResolver {
     static func detectedDate(in text: String, referenceDate: Date) -> Date? {
         let normalized = text
@@ -1468,16 +1086,6 @@ private struct PromptContext: Codable {
     let consumedAt: Date?
     let dashboardContext: String
     let calculation: MealCalculationResult?
-}
-
-private struct SanityReviewContext: Codable {
-    let originalUserText: String
-    let aiReply: AssistantAIReply
-    let localCalculation: MealCalculationResult
-    let mode: String
-    let mealType: String
-    let consumedAt: Date
-    let appLanguage: String
 }
 
 private extension JSONEncoder {
