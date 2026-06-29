@@ -12,8 +12,10 @@ import Foundation
 struct BHealthTests {
 
     @Test func assistantModeTitlesFollowLanguage() {
+        #expect(AssistantMode.allCases.map(\.rawValue) == ["foodLog", "healthCoach"])
         #expect(AssistantMode.foodLog.title(language: .english) == "Log Food")
         #expect(AssistantMode.foodLog.title(language: .chinese) == "记录饮食")
+        #expect(AssistantMode.foodLog.subtitle(language: .chinese).contains("补录"))
         #expect(AppLanguagePreference.system.title(language: .english) == "System")
     }
 

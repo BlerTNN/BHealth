@@ -35,7 +35,6 @@ struct AssistantMessage: Identifiable, Hashable {
 
 enum AssistantMode: String, CaseIterable, Identifiable, Hashable {
     case foodLog
-    case historicalFoodLog
     case healthCoach
 
     var id: String { rawValue }
@@ -48,8 +47,6 @@ enum AssistantMode: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .foodLog:
             return AppText.text("记录饮食", "Log Food", language: language)
-        case .historicalFoodLog:
-            return AppText.text("历史数据添加", "Add Past Data", language: language)
         case .healthCoach:
             return AppText.text("健康助手", "Health Coach", language: language)
         }
@@ -62,9 +59,7 @@ enum AssistantMode: String, CaseIterable, Identifiable, Hashable {
     func subtitle(language: AppLanguage) -> String {
         switch self {
         case .foodLog:
-            return AppText.text("记录今天吃了什么、哪一餐和大致热量", "Log what you ate today, the meal, and rough calories", language: language)
-        case .historicalFoodLog:
-            return AppText.text("补录昨天或更早某一天的早餐、午餐等", "Add breakfast, lunch, or other meals from a past date", language: language)
+            return AppText.text("记录今天或补录过去日期的饮食、餐别和热量", "Log today's meals or add meals from past dates", language: language)
         case .healthCoach:
             return AppText.text("基于历史摄入和消耗提供饮食与减重建议", "Get nutrition and weight guidance from your history", language: language)
         }
@@ -74,8 +69,6 @@ enum AssistantMode: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .foodLog:
             return "fork.knife.circle.fill"
-        case .historicalFoodLog:
-            return "calendar.badge.plus"
         case .healthCoach:
             return "heart.text.square.fill"
         }
@@ -92,9 +85,7 @@ enum AssistantMode: String, CaseIterable, Identifiable, Hashable {
     func welcomeMessage(language: AppLanguage) -> String {
         switch self {
         case .foodLog:
-            return AppText.text("告诉我今天吃了什么，我会帮你估算热量。如果餐别或份量还不清楚，我会继续问。", "Tell me what you ate today. I will estimate calories and ask follow-up questions if the meal or portion is unclear.", language: language)
-        case .historicalFoodLog:
-            return AppText.text("告诉我要补录哪一天、吃了什么。我会确认日期、餐别和热量后再保存。", "Tell me the date and what you ate. I will confirm the date, meal, and calories before saving.", language: language)
+            return AppText.text("告诉我吃了什么和大概时间（今天、昨天、具体日期都可以）。我会确认日期、餐别和热量后再保存。", "Tell me what you ate and roughly when, including today, yesterday, or a specific date. I will confirm the date, meal, and calories before saving.", language: language)
         case .healthCoach:
             return AppText.text("你可以问我饮食建议、热量缺口、近期趋势或大概减重速度。我会结合本地历史记录做判断。", "Ask about nutrition advice, calorie deficit, trends, or rough weight-loss pace. I will use your local history for context.", language: language)
         }
@@ -281,28 +272,6 @@ final class FoodAssistantViewModel: ObservableObject {
         reason: String
     ) -> String {
         if let calculation {
-            if mode == .historicalFoodLog, consumedAt == nil {
-                return AppText.text(
-                    """
-                    AI 回复暂时不可用：\(reason)
-
-                    我先用本地食物库做了粗略参考：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
-                    合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
-
-                    这条历史记录是哪一天？你可以说“昨天”“前天”或具体日期。
-                    """,
-                    """
-                    The AI reply is temporarily unavailable: \(reason)
-
-                    I made a rough local reference estimate: about \(Int(calculation.totalEnergyKcal.rounded())) kcal
-                    Likely range: \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
-
-                    Which day is this past record for? You can say "yesterday", "the day before yesterday", or a specific date.
-                    """,
-                    language: language
-                )
-            }
-
             guard let mealType else {
                 return AppText.text(
                     """
@@ -325,6 +294,28 @@ final class FoodAssistantViewModel: ObservableObject {
                 )
             }
 
+            guard let consumedAt else {
+                return AppText.text(
+                    """
+                    AI 回复暂时不可用：\(reason)
+
+                    我先用本地食物库做了粗略参考：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
+                    合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+
+                    这条记录是哪一天？你可以说“今天”“昨天”“前天”或具体日期。
+                    """,
+                    """
+                    The AI reply is temporarily unavailable: \(reason)
+
+                    I made a rough local reference estimate: about \(Int(calculation.totalEnergyKcal.rounded())) kcal
+                    Likely range: \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+
+                    Which day is this record for? You can say "today", "yesterday", "the day before yesterday", or a specific date.
+                    """,
+                    language: language
+                )
+            }
+
             return AppText.text(
                 """
                 AI 回复暂时不可用：\(reason)
@@ -332,7 +323,7 @@ final class FoodAssistantViewModel: ObservableObject {
                 我先用本地食物库做了粗略参考：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
                 合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
                 可信度：\(calculation.confidence == "low" ? "较低" : "中等")
-                日期：\(consumedAt.map { AppText.shortDate($0, language: language) } ?? "今天")
+                日期：\(AppText.shortDate(consumedAt, language: language))
                 餐别：\(mealType.title(language: language))
 
                 食品：\(calculation.foodDisplayName)
@@ -344,7 +335,7 @@ final class FoodAssistantViewModel: ObservableObject {
                 I made a rough local reference estimate: about \(Int(calculation.totalEnergyKcal.rounded())) kcal
                 Likely range: \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
                 Confidence: \(calculation.confidence == "low" ? "low" : "medium")
-                Date: \(consumedAt.map { AppText.shortDate($0, language: language) } ?? "today")
+                Date: \(AppText.shortDate(consumedAt, language: language))
                 Meal: \(mealType.title(language: language))
 
                 Food: \(calculation.foodDisplayName)
@@ -372,9 +363,13 @@ final class FoodAssistantViewModel: ObservableObject {
     private func consumedAtCandidate(for mode: AssistantMode, text: String, referenceDate: Date) -> Date? {
         switch mode {
         case .foodLog:
+            if let detectedDate = MealDateResolver.detectedDate(in: text, referenceDate: referenceDate) {
+                return detectedDate
+            }
+            if Self.needsDateClarification(for: text) {
+                return nil
+            }
             return Calendar.current.startOfDay(for: referenceDate)
-        case .historicalFoodLog:
-            return MealDateResolver.detectedDate(in: text, referenceDate: referenceDate)
         case .healthCoach:
             return nil
         }
@@ -388,12 +383,32 @@ final class FoodAssistantViewModel: ObservableObject {
     ) -> Date? {
         switch mode {
         case .foodLog:
-            return Calendar.current.startOfDay(for: referenceDate)
-        case .historicalFoodLog:
-            return aiReply.consumedAt(referenceDate: referenceDate) ?? detectedDate
+            return aiReply.consumedAt(referenceDate: referenceDate)
+                ?? detectedDate
         case .healthCoach:
             return nil
         }
+    }
+
+    private static func needsDateClarification(for text: String) -> Bool {
+        let loweredText = text.lowercased()
+        let dateClarificationMarkers = [
+            "补录",
+            "历史",
+            "之前",
+            "以前",
+            "过去",
+            "那天",
+            "某天",
+            "上次",
+            "前几天",
+            "backfill",
+            "past",
+            "previous",
+            "earlier"
+        ]
+
+        return dateClarificationMarkers.contains { loweredText.contains($0) }
     }
 }
 
@@ -441,12 +456,13 @@ struct FoodAssistantEngine {
         5. 每次最多追问 1-2 个最影响结果的信息。如果信息已足够，可以给区间估算。
         6. 只有用户明确确认后才能保存记录。你现在只能建议用户确认，不能声称已经保存。
         7. 不要输出伪精确热量，优先使用整数和范围。
-        8. 记录饮食/历史数据添加模式必须确认餐别；如果用户没有说明早餐、午餐、晚餐、下午茶、加餐/零食或夜宵，先追问餐别，不要要求保存。
-        9. 历史数据添加模式必须确认日期；如果日期不明确，先追问日期，不要要求保存。相对日期要基于 current_date 转成 YYYY-MM-DD。
-        10. food_items 只写具体食品或饮品名称，不要写整句聊天、请求语气或“帮我估算”。
-        11. 如果模式是“健康助手”，提供通用建议、趋势判断、粗略减重估计，不要要求保存饮食记录，should_offer_save 必须为 false。
-        12. reply、assumptions、source_summary 必须使用 \(responseLanguage)。如果用户输入是另一种语言，也要优先服从这个 App 语言设置。
-        13. 输出严格 JSON，不要 Markdown，不要代码块。reply 必须是非空字符串，should_offer_save 必须是 JSON boolean，不要写成字符串。
+        8. 记录饮食模式同时负责今天记录和历史补录，用户可以直接说“今天午餐”“昨晚”“补录 6 月 20 日晚餐”等。
+        9. 记录饮食模式必须确认餐别；如果用户没有说明早餐、午餐、晚餐、下午茶、加餐/零食或夜宵，先追问餐别，不要要求保存。
+        10. 记录饮食模式必须在回复中确认日期。普通饮食记录没有说明日期时，默认使用 current_date；如果用户表达“补录/历史/之前/过去”但没有明确日期，先追问日期，不要要求保存。相对日期要基于 current_date 转成 YYYY-MM-DD。
+        11. food_items 只写具体食品或饮品名称，不要写整句聊天、请求语气或“帮我估算”。
+        12. 如果模式是“健康助手”，提供通用建议、趋势判断、粗略减重估计，不要要求保存饮食记录，should_offer_save 必须为 false。
+        13. reply、assumptions、source_summary 必须使用 \(responseLanguage)。如果用户输入是另一种语言，也要优先服从这个 App 语言设置。
+        14. 输出严格 JSON，不要 Markdown，不要代码块。reply 必须是非空字符串，should_offer_save 必须是 JSON boolean，不要写成字符串。
 
         JSON schema:
         {
@@ -472,11 +488,12 @@ struct FoodAssistantEngine {
         请基于上面的本地计算上下文回复用户。
         App 当前语言是：\(responseLanguage)。所有面向用户的文字必须使用这个语言。
         模式是：\(mode.title(language: language))。
-        如果是记录饮食或历史数据添加：
+        如果是记录饮食：
         - 如果用户没有明确餐别，先追问“这是哪一餐？”，meal_type=null，should_offer_save=false。
-        - 如果是历史数据添加且用户没有明确日期，先追问“这条记录是哪一天？”，consumed_at=null，should_offer_save=false。
-        - 如果已经明确餐别，把 meal_type 和 consumed_at 纳入回复。meal_type 只能使用 breakfast/lunch/dinner/afternoon_tea/snack/late_night/other，consumed_at 只能使用 YYYY-MM-DD 或 null。
-        - 如果是记录饮食，consumed_at 默认使用 current_date 的日期；但用户明确说“昨天/昨晚/前天”等相对日期时，要基于 current_date 转成对应日期。
+        - 如果用户说“补录/历史/之前/过去/那天/上次”等，但没有明确日期，先追问“这条记录是哪一天？”，consumed_at=null，should_offer_save=false。
+        - 如果用户没有说明日期且没有表达历史补录意图，consumed_at 默认使用 current_date 的日期，并在回复里说明“我先按今天理解”。
+        - 如果用户明确说“昨天/昨晚/前天/6月20日”等日期或相对日期，要基于 current_date 转成对应的 YYYY-MM-DD，并在回复里确认该日期。
+        - 如果已经明确餐别和日期，把 meal_type 和 consumed_at 纳入回复。meal_type 只能使用 breakfast/lunch/dinner/afternoon_tea/snack/late_night/other，consumed_at 只能使用 YYYY-MM-DD 或 null。
         - 如果有 calculation，把它作为参考证据，结合用户描述判断是否需要修正或补充。
         - 如果没有 calculation，但用户描述足够可估算，可以给低可信度区间估算，并填写 estimated_energy_kcal / energy_low_kcal / energy_high_kcal。
         - 信息不足时追问食物、份量、克重、品牌/地区或配料中最关键的 1-2 项。
