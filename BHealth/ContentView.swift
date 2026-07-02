@@ -83,6 +83,11 @@ private struct OverviewView: View {
                         calorieBalance: calorieBalance
                     )
 
+                    MacroNutrientSummaryCard(
+                        summary: today,
+                        proteinTargetG: healthStore.proteinTargetG
+                    )
+
                     HStack(spacing: 12) {
                         MetricCard(
                             title: appSettings.text("基础代谢", "Basal burn"),
@@ -116,6 +121,121 @@ private struct OverviewView: View {
                 await healthStore.refreshHealthDataIfPossible()
             }
         }
+    }
+}
+
+private struct MacroNutrientSummaryCard: View {
+    @EnvironmentObject private var appSettings: AppSettings
+    let summary: DailyHealthOverview
+    let proteinTargetG: Double
+
+    private var proteinRemainingG: Double {
+        max(0, proteinTargetG - summary.proteinG)
+    }
+
+    private var progress: Double {
+        guard proteinTargetG > 0 else { return 0 }
+        return min(1, max(0, summary.proteinG / proteinTargetG))
+    }
+
+    private var proteinStatusText: String {
+        if proteinRemainingG > 0 {
+            return appSettings.text(
+                "今日蛋白质还差 \(Int(proteinRemainingG.rounded()))g",
+                "\(Int(proteinRemainingG.rounded()))g protein remaining today"
+            )
+        }
+        return appSettings.text("今日蛋白质目标已达成", "Protein target reached today")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                Image(systemName: "bolt.heart.fill")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(AppColor.skyBlue.gradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(appSettings.text("宏量营养", "Macros"))
+                        .font(.headline.weight(.semibold))
+
+                    Text(proteinStatusText)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            ProgressView(value: progress)
+                .tint(AppColor.healthGreen)
+
+            HStack(spacing: 10) {
+                MacroPill(
+                    title: appSettings.text("蛋白质", "Protein"),
+                    value: summary.proteinG,
+                    target: proteinTargetG,
+                    tint: AppColor.healthGreen
+                )
+
+                MacroPill(
+                    title: appSettings.text("脂肪", "Fat"),
+                    value: summary.fatG,
+                    target: nil,
+                    tint: AppColor.energyOrange
+                )
+
+                MacroPill(
+                    title: appSettings.text("碳水", "Carbs"),
+                    value: summary.carbohydrateG,
+                    target: nil,
+                    tint: AppColor.skyBlue
+                )
+            }
+        }
+        .healthCard()
+    }
+}
+
+private struct MacroPill: View {
+    let title: String
+    let value: Double
+    let target: Double?
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text("\(Int(value.rounded()))")
+                    .font(.headline.weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(tint)
+
+                Text(targetText)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var targetText: String {
+        if let target {
+            return "/\(Int(target.rounded()))g"
+        }
+        return "g"
     }
 }
 
@@ -765,6 +885,13 @@ private struct MealRecordRow: View {
                 Text("\(AppText.shortDate(record.consumedAt, language: appSettings.resolvedLanguage)) · \(record.mealType.title(language: appSettings.resolvedLanguage))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if record.calculation.hasMacroNutrients {
+                    Text(recordMacroText)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
 
             Spacer()
@@ -779,6 +906,13 @@ private struct MealRecordRow: View {
 
     private var recordTitle: String {
         record.calculation.foodDisplayName
+    }
+
+    private var recordMacroText: String {
+        appSettings.text(
+            "蛋白 \(Int(record.calculation.totalProteinG.rounded()))g · 脂肪 \(Int(record.calculation.totalFatG.rounded()))g · 碳水 \(Int(record.calculation.totalCarbohydrateG.rounded()))g",
+            "Protein \(Int(record.calculation.totalProteinG.rounded()))g · Fat \(Int(record.calculation.totalFatG.rounded()))g · Carbs \(Int(record.calculation.totalCarbohydrateG.rounded()))g"
+        )
     }
 }
 
@@ -990,15 +1124,20 @@ private struct MealRecordEditorView: View {
     private var updatedRecord: SavedMealRecord {
         let energy = Double(kcal) ?? record.calculation.totalEnergyKcal
         let trimmedName = foodName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let originalEnergy = max(record.calculation.totalEnergyKcal, 1)
+        let macroScale = max(0, energy / originalEnergy)
+        let proteinG = record.calculation.hasMacroNutrients ? record.calculation.totalProteinG * macroScale : nil
+        let fatG = record.calculation.hasMacroNutrients ? record.calculation.totalFatG * macroScale : nil
+        let carbohydrateG = record.calculation.hasMacroNutrients ? record.calculation.totalCarbohydrateG * macroScale : nil
         let item = MealItemCalculation(
             rawText: trimmedName,
             matchedFoodName: trimmedName,
             fdcId: record.calculation.items.first?.fdcId ?? -1,
             estimatedGrams: record.calculation.items.first?.estimatedGrams ?? 0,
             energyKcal: energy,
-            proteinG: nil,
-            fatG: nil,
-            carbohydrateG: nil,
+            proteinG: proteinG,
+            fatG: fatG,
+            carbohydrateG: carbohydrateG,
             confidence: record.calculation.confidence,
             sourceName: appSettings.text("用户编辑", "User edit"),
             sourceVersion: "manual",
@@ -1195,6 +1334,13 @@ private struct APIKeySetupCard: View {
     @EnvironmentObject private var appSettings: AppSettings
     @Binding var apiKeyInput: String
     let hasAPIKey: Bool
+    let disconnectedTitle: String
+    let connectedTitle: String
+    let connectedSubtitle: String
+    let disconnectedSubtitle: String
+    let secureFieldPrompt: String
+    let icon: String
+    let tint: Color
     let statusMessage: String?
     let saveAction: () -> Void
     let deleteAction: () -> Void
@@ -1202,17 +1348,17 @@ private struct APIKeySetupCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
-                Image(systemName: hasAPIKey ? "checkmark.shield.fill" : "key.fill")
+                Image(systemName: hasAPIKey ? "checkmark.shield.fill" : icon)
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(AppColor.healthGreen)
+                    .foregroundStyle(tint)
                     .frame(width: 36, height: 36)
-                    .background(AppColor.healthGreen.opacity(0.14), in: Circle())
+                    .background(tint.opacity(0.14), in: Circle())
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(hasAPIKey ? appSettings.text("DeepSeek 已连接", "DeepSeek Connected") : "DeepSeek API Key")
+                    Text(hasAPIKey ? connectedTitle : disconnectedTitle)
                         .font(.headline.weight(.semibold))
 
-                    Text(hasAPIKey ? appSettings.text("密钥保存在系统 Keychain", "Key saved in system Keychain") : appSettings.text("保存后开始真实 AI 对话", "Save it to enable real AI conversations"))
+                    Text(hasAPIKey ? connectedSubtitle : disconnectedSubtitle)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -1228,7 +1374,7 @@ private struct APIKeySetupCard: View {
                 .buttonStyle(.bordered)
             } else {
                 HStack(spacing: 10) {
-                    SecureField("DeepSeek API Key", text: $apiKeyInput)
+                    SecureField(secureFieldPrompt, text: $apiKeyInput)
                         .textFieldStyle(.roundedBorder)
 
                     Button(action: saveAction) {
@@ -1236,7 +1382,7 @@ private struct APIKeySetupCard: View {
                             .font(.subheadline.weight(.bold))
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(AppColor.healthGreen)
+                    .tint(tint)
                     .disabled(apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -1396,6 +1542,10 @@ private struct MealCalculationDraftCard: View {
                     .padding(.leading, 4)
             }
 
+            if calculation.hasMacroNutrients {
+                MacroSummaryStrip(calculation: calculation)
+            }
+
             VStack(alignment: .leading, spacing: 8) {
                 if let consumedAt {
                     Label(appSettings.text("日期：\(AppText.shortDate(consumedAt, language: appSettings.resolvedLanguage))", "Date: \(AppText.shortDate(consumedAt, language: appSettings.resolvedLanguage))"), systemImage: "calendar")
@@ -1416,7 +1566,7 @@ private struct MealCalculationDraftCard: View {
                             .foregroundStyle(AppColor.healthGreen)
                             .padding(.top, 7)
 
-                        Text(appSettings.text("\(item.displayFoodName)：约 \(Int(item.energyKcal.rounded())) kcal", "\(item.displayFoodName): about \(Int(item.energyKcal.rounded())) kcal"))
+                        Text(itemSummaryText(item))
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
@@ -1457,6 +1607,55 @@ private struct MealCalculationDraftCard: View {
 
     private var confidenceColor: Color {
         calculation.confidence == "low" ? AppColor.energyOrange : AppColor.healthGreen
+    }
+
+    private func itemSummaryText(_ item: MealItemCalculation) -> String {
+        var nutrients = ["\(Int(item.energyKcal.rounded())) kcal"]
+        if let proteinG = item.proteinG {
+            nutrients.append(appSettings.text("蛋白 \(Int(proteinG.rounded()))g", "protein \(Int(proteinG.rounded()))g"))
+        }
+        if let fatG = item.fatG {
+            nutrients.append(appSettings.text("脂肪 \(Int(fatG.rounded()))g", "fat \(Int(fatG.rounded()))g"))
+        }
+        if let carbohydrateG = item.carbohydrateG {
+            nutrients.append(appSettings.text("碳水 \(Int(carbohydrateG.rounded()))g", "carbs \(Int(carbohydrateG.rounded()))g"))
+        }
+        return "\(item.displayFoodName): \(nutrients.joined(separator: " · "))"
+    }
+}
+
+private struct MacroSummaryStrip: View {
+    @EnvironmentObject private var appSettings: AppSettings
+    let calculation: MealCalculationResult
+
+    var body: some View {
+        HStack(spacing: 8) {
+            MacroMiniBadge(title: appSettings.text("蛋白", "Protein"), value: calculation.totalProteinG, tint: AppColor.healthGreen)
+            MacroMiniBadge(title: appSettings.text("脂肪", "Fat"), value: calculation.totalFatG, tint: AppColor.energyOrange)
+            MacroMiniBadge(title: appSettings.text("碳水", "Carbs"), value: calculation.totalCarbohydrateG, tint: AppColor.skyBlue)
+        }
+    }
+}
+
+private struct MacroMiniBadge: View {
+    let title: String
+    let value: Double
+    let tint: Color
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text("\(Int(value.rounded()))g")
+                .font(.caption.weight(.bold))
+                .monospacedDigit()
+                .foregroundStyle(tint)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(tint.opacity(0.11), in: Capsule())
     }
 }
 
@@ -1509,6 +1708,9 @@ private struct ProfileView: View {
     @State private var apiKeyInput = ""
     @State private var hasAPIKey = KeychainAPIKeyStore.shared.hasAPIKey
     @State private var apiKeyStatusMessage: String?
+    @State private var tavilyAPIKeyInput = ""
+    @State private var hasTavilyAPIKey = TavilyAPIKeyStore.shared.hasAPIKey
+    @State private var tavilyAPIKeyStatusMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -1526,9 +1728,31 @@ private struct ProfileView: View {
                     APIKeySetupCard(
                         apiKeyInput: $apiKeyInput,
                         hasAPIKey: hasAPIKey,
+                        disconnectedTitle: "DeepSeek API Key",
+                        connectedTitle: appSettings.text("DeepSeek 已连接", "DeepSeek Connected"),
+                        connectedSubtitle: appSettings.text("密钥保存在系统 Keychain", "Key saved in system Keychain"),
+                        disconnectedSubtitle: appSettings.text("保存后开始真实 AI 对话", "Save it to enable real AI conversations"),
+                        secureFieldPrompt: "DeepSeek API Key",
+                        icon: "key.fill",
+                        tint: AppColor.healthGreen,
                         statusMessage: apiKeyStatusMessage,
                         saveAction: saveAPIKey,
                         deleteAction: deleteAPIKey
+                    )
+
+                    APIKeySetupCard(
+                        apiKeyInput: $tavilyAPIKeyInput,
+                        hasAPIKey: hasTavilyAPIKey,
+                        disconnectedTitle: appSettings.text("Tavily 联网搜索 Key", "Tavily Web Search Key"),
+                        connectedTitle: appSettings.text("联网搜索已开启", "Web Search Enabled"),
+                        connectedSubtitle: appSettings.text("AI 会在需要时联网检索", "AI can search the web when useful"),
+                        disconnectedSubtitle: appSettings.text("可选：用于品牌食品、餐厅和最新信息", "Optional: brands, restaurants, and current info"),
+                        secureFieldPrompt: "Tavily API Key",
+                        icon: "network",
+                        tint: AppColor.skyBlue,
+                        statusMessage: tavilyAPIKeyStatusMessage,
+                        saveAction: saveTavilyAPIKey,
+                        deleteAction: deleteTavilyAPIKey
                     )
 
                     LanguageSettingsCard()
@@ -1542,6 +1766,7 @@ private struct ProfileView: View {
             .navigationTitle(appSettings.text("我的", "Me"))
             .onAppear {
                 hasAPIKey = KeychainAPIKeyStore.shared.hasAPIKey
+                hasTavilyAPIKey = TavilyAPIKeyStore.shared.hasAPIKey
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -1665,6 +1890,29 @@ private struct ProfileView: View {
         } catch {
             let reason = (error as? KeychainError)?.message(language: appSettings.resolvedLanguage) ?? error.localizedDescription
             apiKeyStatusMessage = appSettings.text("删除 API key 失败：\(reason)", "Failed to delete API key: \(reason)")
+        }
+    }
+
+    private func saveTavilyAPIKey() {
+        do {
+            try TavilyAPIKeyStore.shared.saveAPIKey(tavilyAPIKeyInput)
+            tavilyAPIKeyInput = ""
+            hasTavilyAPIKey = true
+            tavilyAPIKeyStatusMessage = appSettings.text("Tavily API key 已保存到系统 Keychain。", "Tavily API key saved to system Keychain.")
+        } catch {
+            let reason = (error as? KeychainError)?.message(language: appSettings.resolvedLanguage) ?? error.localizedDescription
+            tavilyAPIKeyStatusMessage = appSettings.text("保存 Tavily key 失败：\(reason)", "Failed to save Tavily key: \(reason)")
+        }
+    }
+
+    private func deleteTavilyAPIKey() {
+        do {
+            try TavilyAPIKeyStore.shared.deleteAPIKey()
+            hasTavilyAPIKey = false
+            tavilyAPIKeyStatusMessage = appSettings.text("已从 Keychain 删除 Tavily API key。", "Tavily API key deleted from Keychain.")
+        } catch {
+            let reason = (error as? KeychainError)?.message(language: appSettings.resolvedLanguage) ?? error.localizedDescription
+            tavilyAPIKeyStatusMessage = appSettings.text("删除 Tavily key 失败：\(reason)", "Failed to delete Tavily key: \(reason)")
         }
     }
 }

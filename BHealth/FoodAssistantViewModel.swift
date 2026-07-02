@@ -216,7 +216,7 @@ final class FoodAssistantViewModel: ObservableObject {
             if mode.supportsMealSaving, aiReply.shouldOfferSave, let resolvedMealType, let resolvedConsumedAt {
                 pendingMealType = resolvedMealType
                 pendingConsumedAt = resolvedConsumedAt
-                pendingCalculation = aiReply.estimatedCalculation(for: text, language: language) ?? calculation
+                pendingCalculation = aiReply.estimatedCalculation(for: text, language: language, fallbackCalculation: calculation) ?? calculation
             }
         } catch {
             let reply = localFallbackReply(
@@ -254,12 +254,21 @@ final class FoodAssistantViewModel: ObservableObject {
         messages.append(
             AssistantMessage(
                 text: AppText.text(
-                    "已保存到本地记录：\(AppText.shortDate(record.consumedAt, language: language)) \(record.mealType.title(language: language)) \(record.calculation.foodDisplayName)，约 \(kcal) kcal。",
-                    "Saved locally: \(AppText.shortDate(record.consumedAt, language: language)) \(record.mealType.title(language: language)) \(record.calculation.foodDisplayName), about \(kcal) kcal.",
+                    "已保存到本地记录：\(AppText.shortDate(record.consumedAt, language: language)) \(record.mealType.title(language: language)) \(record.calculation.foodDisplayName)，约 \(kcal) kcal。\(saveMacroSummary(for: record.calculation))",
+                    "Saved locally: \(AppText.shortDate(record.consumedAt, language: language)) \(record.mealType.title(language: language)) \(record.calculation.foodDisplayName), about \(kcal) kcal.\(saveMacroSummary(for: record.calculation))",
                     language: language
                 ),
                 isFromUser: false
             )
+        )
+    }
+
+    private func saveMacroSummary(for calculation: MealCalculationResult) -> String {
+        guard calculation.hasMacroNutrients else { return "" }
+        return AppText.text(
+            " 蛋白质约 \(Int(calculation.totalProteinG.rounded()))g，脂肪约 \(Int(calculation.totalFatG.rounded()))g，碳水约 \(Int(calculation.totalCarbohydrateG.rounded()))g。",
+            " Protein about \(Int(calculation.totalProteinG.rounded()))g, fat \(Int(calculation.totalFatG.rounded()))g, carbs \(Int(calculation.totalCarbohydrateG.rounded()))g.",
+            language: language
         )
     }
 
@@ -279,6 +288,7 @@ final class FoodAssistantViewModel: ObservableObject {
 
                     我先用本地食物库做了粗略参考：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
                     合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+                    \(macroSummaryText(for: calculation))
 
                     这是早餐、午餐、晚餐、下午茶、加餐/零食还是夜宵？
                     """,
@@ -287,6 +297,7 @@ final class FoodAssistantViewModel: ObservableObject {
 
                     I made a rough local reference estimate: about \(Int(calculation.totalEnergyKcal.rounded())) kcal
                     Likely range: \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+                    \(macroSummaryText(for: calculation))
 
                     Was this breakfast, lunch, dinner, afternoon tea, a snack, or late-night food?
                     """,
@@ -301,6 +312,7 @@ final class FoodAssistantViewModel: ObservableObject {
 
                     我先用本地食物库做了粗略参考：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
                     合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+                    \(macroSummaryText(for: calculation))
 
                     这条记录是哪一天？你可以说“今天”“昨天”“前天”或具体日期。
                     """,
@@ -309,6 +321,7 @@ final class FoodAssistantViewModel: ObservableObject {
 
                     I made a rough local reference estimate: about \(Int(calculation.totalEnergyKcal.rounded())) kcal
                     Likely range: \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+                    \(macroSummaryText(for: calculation))
 
                     Which day is this record for? You can say "today", "yesterday", "the day before yesterday", or a specific date.
                     """,
@@ -322,6 +335,7 @@ final class FoodAssistantViewModel: ObservableObject {
 
                 我先用本地食物库做了粗略参考：约 \(Int(calculation.totalEnergyKcal.rounded())) kcal
                 合理范围：\(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+                \(macroSummaryText(for: calculation))
                 可信度：\(calculation.confidence == "low" ? "较低" : "中等")
                 日期：\(AppText.shortDate(consumedAt, language: language))
                 餐别：\(mealType.title(language: language))
@@ -334,6 +348,7 @@ final class FoodAssistantViewModel: ObservableObject {
 
                 I made a rough local reference estimate: about \(Int(calculation.totalEnergyKcal.rounded())) kcal
                 Likely range: \(Int(calculation.rangeLowKcal.rounded()))-\(Int(calculation.rangeHighKcal.rounded())) kcal
+                \(macroSummaryText(for: calculation))
                 Confidence: \(calculation.confidence == "low" ? "low" : "medium")
                 Date: \(AppText.shortDate(consumedAt, language: language))
                 Meal: \(mealType.title(language: language))
@@ -356,6 +371,15 @@ final class FoodAssistantViewModel: ObservableObject {
 
             You can add clearer details first, such as the food name, quantity, or weight. For example: "1 egg, 250g milk".
             """,
+            language: language
+        )
+    }
+
+    private func macroSummaryText(for calculation: MealCalculationResult) -> String {
+        guard calculation.hasMacroNutrients else { return "" }
+        return AppText.text(
+            "宏量营养：蛋白质约 \(Int(calculation.totalProteinG.rounded()))g，脂肪约 \(Int(calculation.totalFatG.rounded()))g，碳水约 \(Int(calculation.totalCarbohydrateG.rounded()))g。",
+            "Macros: about \(Int(calculation.totalProteinG.rounded()))g protein, \(Int(calculation.totalFatG.rounded()))g fat, \(Int(calculation.totalCarbohydrateG.rounded()))g carbs.",
             language: language
         )
     }
@@ -414,9 +438,11 @@ final class FoodAssistantViewModel: ObservableObject {
 
 struct FoodAssistantEngine {
     private let client: DeepSeekClient
+    private let searchClient: TavilySearchClient
 
-    init(client: DeepSeekClient = DeepSeekClient()) {
+    init(client: DeepSeekClient = DeepSeekClient(), searchClient: TavilySearchClient = TavilySearchClient()) {
         self.client = client
+        self.searchClient = searchClient
     }
 
     func respond(
@@ -430,6 +456,11 @@ struct FoodAssistantEngine {
         dashboardContext: String,
         language: AppLanguage
     ) async throws -> AssistantAIReply {
+        let webSearchContext = await webSearchContextIfNeeded(
+            userText: userText,
+            mode: mode,
+            calculation: calculation
+        )
         let context = PromptContext(
             userText: userText,
             mode: mode.title(language: language),
@@ -437,7 +468,8 @@ struct FoodAssistantEngine {
             currentDate: currentDate,
             consumedAt: consumedAt,
             dashboardContext: dashboardContext,
-            calculation: calculation
+            calculation: calculation,
+            webSearch: webSearchContext
         )
         let contextData = try JSONEncoder.promptEncoder.encode(context)
         let contextJSON = String(data: contextData, encoding: .utf8) ?? "{}"
@@ -451,18 +483,19 @@ struct FoodAssistantEngine {
         你是 BHealth 的 AI 饮食热量记录助手。必须遵守：
         1. AI 负责理解自然语言、追问缺失信息、参考食物库证据、进行有标注的粗略推理，并解释结果。
         2. local_calculation_context 中的 calculation 是本地 USDA 食物库和程序计算结果，只作为参考证据，不是唯一来源。
-        3. 如果本地食物库没有覆盖用户食物，你可以基于常识做低可信度估算，但必须明确标注“AI 推理估算/低可信度”，不要伪装成权威数据。
-        4. 不要编造品牌官方菜单、包装标签或来源版本；品牌食品缺少官方资料时要说明。
-        5. 每次最多追问 1-2 个最影响结果的信息。如果信息已足够，可以给区间估算。
-        6. 只有用户明确确认后才能保存记录。你现在只能建议用户确认，不能声称已经保存。
-        7. 不要输出伪精确热量，优先使用整数和范围。
-        8. 记录饮食模式同时负责今天记录和历史补录，用户可以直接说“今天午餐”“昨晚”“补录 6 月 20 日晚餐”等。
-        9. 记录饮食模式必须确认餐别；如果用户没有说明早餐、午餐、晚餐、下午茶、加餐/零食或夜宵，先追问餐别，不要要求保存。
-        10. 记录饮食模式必须在回复中确认日期。普通饮食记录没有说明日期时，默认使用 current_date；如果用户表达“补录/历史/之前/过去”但没有明确日期，先追问日期，不要要求保存。相对日期要基于 current_date 转成 YYYY-MM-DD。
-        11. food_items 只写具体食品或饮品名称，不要写整句聊天、请求语气或“帮我估算”。
-        12. 如果模式是“健康助手”，提供通用建议、趋势判断、粗略减重估计，不要要求保存饮食记录，should_offer_save 必须为 false。
-        13. reply、assumptions、source_summary 必须使用 \(responseLanguage)。如果用户输入是另一种语言，也要优先服从这个 App 语言设置。
-        14. 输出严格 JSON，不要 Markdown，不要代码块。reply 必须是非空字符串，should_offer_save 必须是 JSON boolean，不要写成字符串。
+        3. local_calculation_context 中的 web_search 是可选联网搜索证据。它只用于补充品牌食品、餐厅菜单、近期健康信息或本地食物库缺失的信息；不要把搜索摘要当成绝对权威。
+        4. 如果本地食物库没有覆盖用户食物，你可以基于常识或 web_search 做低可信度估算，但必须明确标注“AI 推理估算/低可信度”，不要伪装成权威数据。
+        5. 不要编造品牌官方菜单、包装标签或来源版本；品牌食品缺少官方资料时要说明。
+        6. 每次最多追问 1-2 个最影响结果的信息。如果信息已足够，可以给区间估算。
+        7. 只有用户明确确认后才能保存记录。你现在只能建议用户确认，不能声称已经保存。
+        8. 不要输出伪精确热量和宏量营养，优先使用整数和范围。
+        9. 记录饮食模式同时负责今天记录和历史补录，用户可以直接说“今天午餐”“昨晚”“补录 6 月 20 日晚餐”等。
+        10. 记录饮食模式必须确认餐别；如果用户没有说明早餐、午餐、晚餐、下午茶、加餐/零食或夜宵，先追问餐别，不要要求保存。
+        11. 记录饮食模式必须在回复中确认日期。普通饮食记录没有说明日期时，默认使用 current_date；如果用户表达“补录/历史/之前/过去”但没有明确日期，先追问日期，不要要求保存。相对日期要基于 current_date 转成 YYYY-MM-DD。
+        12. food_items 只写具体食品或饮品名称，不要写整句聊天、请求语气或“帮我估算”。
+        13. 如果模式是“健康助手”，提供通用建议、趋势判断、粗略减重估计，不要要求保存饮食记录，should_offer_save 必须为 false。
+        14. reply、assumptions、source_summary 必须使用 \(responseLanguage)。如果用户输入是另一种语言，也要优先服从这个 App 语言设置。
+        15. 输出严格 JSON，不要 Markdown，不要代码块。reply 必须是非空字符串，should_offer_save 必须是 JSON boolean，不要写成字符串。
 
         JSON schema:
         {
@@ -473,9 +506,21 @@ struct FoodAssistantEngine {
           "estimated_energy_kcal": 430,
           "energy_low_kcal": 370,
           "energy_high_kcal": 500,
+          "estimated_protein_g": 28,
+          "estimated_fat_g": 18,
+          "estimated_carbohydrate_g": 45,
           "meal_type": "breakfast|lunch|dinner|afternoon_tea|snack|late_night|other|null",
           "consumed_at": "YYYY-MM-DD|null",
           "food_items": ["鸡蛋", "拿铁", "吐司"],
+          "food_item_estimates": [
+            {
+              "name": "鸡蛋",
+              "energy_kcal": 70,
+              "protein_g": 6,
+              "fat_g": 5,
+              "carbohydrate_g": 1
+            }
+          ],
           "assumptions": ["用于保存快照的关键假设，使用 \(responseLanguage)"],
           "source_summary": "来源摘要，使用 \(responseLanguage)"
         }
@@ -495,7 +540,9 @@ struct FoodAssistantEngine {
         - 如果用户明确说“昨天/昨晚/前天/6月20日”等日期或相对日期，要基于 current_date 转成对应的 YYYY-MM-DD，并在回复里确认该日期。
         - 如果已经明确餐别和日期，把 meal_type 和 consumed_at 纳入回复。meal_type 只能使用 breakfast/lunch/dinner/afternoon_tea/snack/late_night/other，consumed_at 只能使用 YYYY-MM-DD 或 null。
         - 如果有 calculation，把它作为参考证据，结合用户描述判断是否需要修正或补充。
+        - 如果有 web_search，优先用于品牌、餐厅、包装食品或最近信息的佐证；在 source_summary 或 assumptions 中简短说明使用了联网参考。
         - 如果没有 calculation，但用户描述足够可估算，可以给低可信度区间估算，并填写 estimated_energy_kcal / energy_low_kcal / energy_high_kcal。
+        - 必须尽量填写 estimated_protein_g / estimated_fat_g / estimated_carbohydrate_g。能拆分具体食物时，填写 food_item_estimates；不能可靠拆分时，可以填总量字段并在 assumptions 说明。
         - 信息不足时追问食物、份量、克重、品牌/地区或配料中最关键的 1-2 项。
         - food_items 中只放食品名称，例如 ["鸡蛋", "牛奶"]，不要放“我吃了”“补录昨天”等对话文本。
         - 只有食物信息、餐别和必要日期都明确时，才可以询问“是否确认保存”，并把 should_offer_save 设为 true。
@@ -512,6 +559,24 @@ struct FoodAssistantEngine {
         let content = try await client.complete(messages: messages)
         return AssistantAIReply.parseOrFallback(from: content, language: language)
     }
+
+    private func webSearchContextIfNeeded(
+        userText: String,
+        mode: AssistantMode,
+        calculation: MealCalculationResult?
+    ) async -> WebSearchContext? {
+        guard searchClient.hasAPIKey,
+              let query = WebSearchPlanner.query(for: userText, mode: mode, calculation: calculation) else {
+            return nil
+        }
+
+        do {
+            let context = try await searchClient.search(query)
+            return context.isEmpty ? nil : context
+        } catch {
+            return nil
+        }
+    }
 }
 
 struct AssistantAIReply: Codable, Hashable {
@@ -522,9 +587,13 @@ struct AssistantAIReply: Codable, Hashable {
     let estimatedEnergyKcal: Double?
     let energyLowKcal: Double?
     let energyHighKcal: Double?
+    let estimatedProteinG: Double?
+    let estimatedFatG: Double?
+    let estimatedCarbohydrateG: Double?
     let mealTypeRaw: String?
     let consumedAtRaw: String?
     let foodItems: [String]?
+    let foodItemEstimates: [AssistantFoodItemEstimate]?
     let assumptions: [String]?
     let sourceSummary: String?
 
@@ -544,9 +613,13 @@ struct AssistantAIReply: Codable, Hashable {
         case estimatedEnergyKcal = "estimated_energy_kcal"
         case energyLowKcal = "energy_low_kcal"
         case energyHighKcal = "energy_high_kcal"
+        case estimatedProteinG = "estimated_protein_g"
+        case estimatedFatG = "estimated_fat_g"
+        case estimatedCarbohydrateG = "estimated_carbohydrate_g"
         case mealTypeRaw = "meal_type"
         case consumedAtRaw = "consumed_at"
         case foodItems = "food_items"
+        case foodItemEstimates = "food_item_estimates"
         case assumptions
         case sourceSummary = "source_summary"
     }
@@ -559,9 +632,13 @@ struct AssistantAIReply: Codable, Hashable {
         estimatedEnergyKcal: Double? = nil,
         energyLowKcal: Double? = nil,
         energyHighKcal: Double? = nil,
+        estimatedProteinG: Double? = nil,
+        estimatedFatG: Double? = nil,
+        estimatedCarbohydrateG: Double? = nil,
         mealTypeRaw: String? = nil,
         consumedAtRaw: String? = nil,
         foodItems: [String]? = nil,
+        foodItemEstimates: [AssistantFoodItemEstimate]? = nil,
         assumptions: [String]? = nil,
         sourceSummary: String? = nil
     ) {
@@ -572,9 +649,13 @@ struct AssistantAIReply: Codable, Hashable {
         self.estimatedEnergyKcal = estimatedEnergyKcal
         self.energyLowKcal = energyLowKcal
         self.energyHighKcal = energyHighKcal
+        self.estimatedProteinG = estimatedProteinG
+        self.estimatedFatG = estimatedFatG
+        self.estimatedCarbohydrateG = estimatedCarbohydrateG
         self.mealTypeRaw = mealTypeRaw
         self.consumedAtRaw = consumedAtRaw
         self.foodItems = foodItems
+        self.foodItemEstimates = foodItemEstimates
         self.assumptions = assumptions
         self.sourceSummary = sourceSummary
     }
@@ -588,9 +669,13 @@ struct AssistantAIReply: Codable, Hashable {
         estimatedEnergyKcal = container.decodeLossyDouble(forKey: .estimatedEnergyKcal)
         energyLowKcal = container.decodeLossyDouble(forKey: .energyLowKcal)
         energyHighKcal = container.decodeLossyDouble(forKey: .energyHighKcal)
+        estimatedProteinG = container.decodeLossyDouble(forKey: .estimatedProteinG)
+        estimatedFatG = container.decodeLossyDouble(forKey: .estimatedFatG)
+        estimatedCarbohydrateG = container.decodeLossyDouble(forKey: .estimatedCarbohydrateG)
         mealTypeRaw = container.decodeLossyString(forKey: .mealTypeRaw)
         consumedAtRaw = container.decodeLossyString(forKey: .consumedAtRaw)
         foodItems = container.decodeLossyStringArray(forKey: .foodItems)
+        foodItemEstimates = (try? container.decode([AssistantFoodItemEstimate].self, forKey: .foodItemEstimates))?.filter { $0.energyKcal > 0 }
         assumptions = container.decodeLossyStringArray(forKey: .assumptions)
         sourceSummary = container.decodeLossyString(forKey: .sourceSummary)
     }
@@ -622,7 +707,7 @@ struct AssistantAIReply: Codable, Hashable {
         )
     }
 
-    func estimatedCalculation(for userText: String, language: AppLanguage = .chinese) -> MealCalculationResult? {
+    func estimatedCalculation(for userText: String, language: AppLanguage = .chinese, fallbackCalculation: MealCalculationResult? = nil) -> MealCalculationResult? {
         guard let estimatedEnergyKcal, estimatedEnergyKcal > 0 else { return nil }
 
         let low = energyLowKcal ?? estimatedEnergyKcal * 0.75
@@ -632,24 +717,47 @@ struct AssistantAIReply: Codable, Hashable {
             AppText.text("根据你的描述做粗略区间估算。", "Made a rough range estimate from your description.", language: language)
         ]
         let foodName = MealFoodNameFormatter.displayName(from: foodItems, fallback: userText)
+        let fallbackTotals = MacroNutrientTotals(calculation: fallbackCalculation)
+        let itemEstimates = foodItemEstimates?.filter { $0.energyKcal > 0 } ?? []
+        let items: [MealItemCalculation]
 
-        let item = MealItemCalculation(
-            rawText: foodName,
-            matchedFoodName: foodName,
-            fdcId: -1,
-            estimatedGrams: 0,
-            energyKcal: estimatedEnergyKcal,
-            proteinG: nil,
-            fatG: nil,
-            carbohydrateG: nil,
-            confidence: confidence == "medium" ? "medium" : "low",
-            sourceName: source,
-            sourceVersion: "runtime-estimate",
-            assumptions: snapshotAssumptions
-        )
+        if !itemEstimates.isEmpty {
+            items = itemEstimates.map { estimate in
+                MealItemCalculation(
+                    rawText: estimate.name,
+                    matchedFoodName: estimate.name,
+                    fdcId: -1,
+                    estimatedGrams: 0,
+                    energyKcal: estimate.energyKcal,
+                    proteinG: estimate.proteinG,
+                    fatG: estimate.fatG,
+                    carbohydrateG: estimate.carbohydrateG,
+                    confidence: confidence == "medium" ? "medium" : "low",
+                    sourceName: source,
+                    sourceVersion: "runtime-estimate",
+                    assumptions: snapshotAssumptions
+                )
+            }
+        } else {
+            let item = MealItemCalculation(
+                rawText: foodName,
+                matchedFoodName: foodName,
+                fdcId: -1,
+                estimatedGrams: fallbackCalculation?.items.first?.estimatedGrams ?? 0,
+                energyKcal: estimatedEnergyKcal,
+                proteinG: estimatedProteinG ?? fallbackTotals.proteinG,
+                fatG: estimatedFatG ?? fallbackTotals.fatG,
+                carbohydrateG: estimatedCarbohydrateG ?? fallbackTotals.carbohydrateG,
+                confidence: confidence == "medium" ? "medium" : "low",
+                sourceName: source,
+                sourceVersion: "runtime-estimate",
+                assumptions: snapshotAssumptions
+            )
+            items = [item]
+        }
 
         return MealCalculationResult(
-            items: [item],
+            items: items,
             totalEnergyKcal: estimatedEnergyKcal,
             rangeLowKcal: max(0, min(low, high)),
             rangeHighKcal: max(low, high),
@@ -657,6 +765,62 @@ struct AssistantAIReply: Codable, Hashable {
             assumptions: snapshotAssumptions,
             sourceSummary: source
         )
+    }
+}
+
+struct AssistantFoodItemEstimate: Codable, Hashable {
+    let name: String
+    let energyKcal: Double
+    let proteinG: Double?
+    let fatG: Double?
+    let carbohydrateG: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case energyKcal = "energy_kcal"
+        case proteinG = "protein_g"
+        case fatG = "fat_g"
+        case carbohydrateG = "carbohydrate_g"
+    }
+
+    init(
+        name: String,
+        energyKcal: Double,
+        proteinG: Double? = nil,
+        fatG: Double? = nil,
+        carbohydrateG: Double? = nil
+    ) {
+        self.name = name
+        self.energyKcal = energyKcal
+        self.proteinG = proteinG
+        self.fatG = fatG
+        self.carbohydrateG = carbohydrateG
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = container.decodeLossyString(forKey: .name) ?? "Food item"
+        energyKcal = container.decodeLossyDouble(forKey: .energyKcal) ?? 0
+        proteinG = container.decodeLossyDouble(forKey: .proteinG)
+        fatG = container.decodeLossyDouble(forKey: .fatG)
+        carbohydrateG = container.decodeLossyDouble(forKey: .carbohydrateG)
+    }
+}
+
+private struct MacroNutrientTotals {
+    let proteinG: Double?
+    let fatG: Double?
+    let carbohydrateG: Double?
+
+    init(calculation: MealCalculationResult?) {
+        proteinG = Self.sum(calculation?.items.compactMap(\.proteinG))
+        fatG = Self.sum(calculation?.items.compactMap(\.fatG))
+        carbohydrateG = Self.sum(calculation?.items.compactMap(\.carbohydrateG))
+    }
+
+    private static func sum(_ values: [Double]?) -> Double? {
+        guard let values, !values.isEmpty else { return nil }
+        return values.reduce(0, +)
     }
 }
 
@@ -1103,6 +1267,7 @@ private struct PromptContext: Codable {
     let consumedAt: Date?
     let dashboardContext: String
     let calculation: MealCalculationResult?
+    let webSearch: WebSearchContext?
 }
 
 private extension JSONEncoder {

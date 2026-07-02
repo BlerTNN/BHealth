@@ -32,7 +32,7 @@ struct DeepSeekClient {
             model: "deepseek-v4-flash",
             messages: messages,
             temperature: temperature,
-            maxTokens: 900,
+            maxTokens: 1200,
             responseFormat: DeepSeekResponseFormat(type: "json_object")
         )
         request.httpBody = try JSONEncoder.deepSeekEncoder.encode(body)

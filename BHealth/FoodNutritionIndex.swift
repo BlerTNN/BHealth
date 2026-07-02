@@ -229,6 +229,22 @@ extension MealCalculationResult {
     nonisolated var foodDisplayName: String {
         MealFoodNameFormatter.displayName(from: items)
     }
+
+    nonisolated var totalProteinG: Double {
+        items.compactMap(\.proteinG).reduce(0, +)
+    }
+
+    nonisolated var totalFatG: Double {
+        items.compactMap(\.fatG).reduce(0, +)
+    }
+
+    nonisolated var totalCarbohydrateG: Double {
+        items.compactMap(\.carbohydrateG).reduce(0, +)
+    }
+
+    nonisolated var hasMacroNutrients: Bool {
+        items.contains { $0.proteinG != nil || $0.fatG != nil || $0.carbohydrateG != nil }
+    }
 }
 
 enum MealType: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {

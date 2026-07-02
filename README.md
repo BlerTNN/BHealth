@@ -6,7 +6,7 @@ The app is designed around three main tabs:
 
 - **Overview**: daily remaining calories, weekly trends, yearly calendar, and meal history.
 - **AI Assistant**: natural-language meal logging and general health coaching.
-- **Me**: profile, target data, language settings, Apple Health sync, and DeepSeek API key management.
+- **Me**: profile, target data, language settings, Apple Health sync, DeepSeek API key management, and optional web search setup.
 
 ## Features
 
@@ -23,9 +23,21 @@ The AI assistant can:
 - Understand food descriptions in context.
 - Ask follow-up questions for missing meal type, date, or portion details.
 - Estimate rough calories with a likely range.
+- Estimate protein, fat, and carbohydrate intake for the full meal and individual food items when possible.
 - Confirm date, meal type, food items, and calories before saving.
 - Save confirmed meal records locally.
 - Support both today's logging and historical backfill through the same **Log Food** flow.
+
+### Optional Web Search
+
+BHealth can use Tavily Search API as a lightweight web search layer for DeepSeek. This is useful when the app needs current or external context, such as:
+
+- Brand or packaged foods.
+- Restaurant and menu items.
+- Recent health or nutrition information.
+- Foods not covered well by the bundled local food index.
+
+DeepSeek remains the reasoning model. Tavily only provides search context. If no Tavily API key is saved, the app falls back to the existing non-web AI flow.
 
 ### Health Coach
 
@@ -43,6 +55,8 @@ Health coach responses are informational and do not create meal records.
 The Overview tab shows:
 
 - Today's calorie balance.
+- Today's protein gap against the app's default protein target.
+- Logged protein, fat, and carbohydrate totals.
 - Intake, active burn, basal burn, and total burn.
 - A default 7-day trend.
 - A yearly calendar view with daily calorie balance summaries.
@@ -95,6 +109,7 @@ The selected language affects the UI and AI-facing response instructions.
 - Swift Testing
 - DeepSeek Chat Completions API
 - Model: `deepseek-v4-flash`
+- Tavily Search API for optional web search context
 
 ## Requirements
 
@@ -102,6 +117,7 @@ The selected language affects the UI and AI-facing response instructions.
 - iOS target compatible with the project deployment target
 - An Apple Developer team configured in Xcode for device deployment
 - A DeepSeek API key for AI assistant functionality
+- Optional: a Tavily API key for web search
 - An iPhone for full Apple Health / Fitness integration
 
 The current project settings use:
@@ -177,6 +193,16 @@ For direct command-line installation, first build for the connected device, then
 
 The key is stored in Keychain and should not be written to source files.
 
+### Configure Optional Web Search
+
+1. Open the app.
+2. Go to **Me**.
+3. Find the Tavily web search key field.
+4. Paste your Tavily API key.
+5. Save it.
+
+When configured, the AI assistant can retrieve lightweight web context before asking DeepSeek to reason over the meal or health question. The app uses this only when useful, such as brand foods, restaurant foods, or explicitly current questions.
+
 ### Sync Apple Health
 
 1. Open **Me**.
@@ -205,9 +231,10 @@ BHealth avoids cloud storage for personal health data. The app uses:
 
 - `UserDefaults` / local JSON storage for app preferences and local records.
 - iOS Keychain for the DeepSeek API key.
+- iOS Keychain for the optional Tavily API key.
 - HealthKit APIs for Apple Health / Fitness reads.
 
-Do not hardcode API keys in the project. Before committing, scan for your API provider's secret prefix and remove any accidental matches.
+Do not hardcode API keys in the project. Before committing, scan for your API providers' secret prefixes and remove any accidental matches.
 
 ## Development
 
@@ -251,6 +278,7 @@ BHealth/
   FoodNutritionIndex.swift      Food index models, meal records, local persistence
   HealthDashboardStore.swift    Dashboard state, HealthKit sync, yearly summaries
   KeychainAPIKeyStore.swift     Secure local API key storage
+  TavilySearchClient.swift      Optional web search context provider
   Data/FoodNutritionIndex.json  Bundled food reference data
 BHealthTests/
   BHealthTests.swift            Unit tests for assistant parsing, language, date logic
@@ -274,6 +302,16 @@ Possible causes:
 - The model response is empty or malformed.
 
 The app may show the API error and continue the conversation where possible.
+
+### Web Search Does Not Run
+
+Check:
+
+- Tavily API key is saved in **Me**.
+- The question benefits from current or external data.
+- Network access is available.
+
+The assistant still works without web search.
 
 ### Apple Health Data Does Not Appear
 

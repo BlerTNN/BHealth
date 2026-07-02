@@ -49,6 +49,53 @@ struct BHealthTests {
         #expect(calculation.foodDisplayName == "麻辣烫")
     }
 
+    @Test func assistantReplyParsesPerItemMacroEstimates() throws {
+        let content = """
+        {
+          "reply": "我理解为早餐吃了鸡蛋和吐司，总计约 210 kcal。请确认是否保存。",
+          "assistant_state": "confirming",
+          "confidence": "medium",
+          "should_offer_save": true,
+          "estimated_energy_kcal": 210,
+          "energy_low_kcal": 180,
+          "energy_high_kcal": 260,
+          "estimated_protein_g": 13,
+          "estimated_fat_g": 8,
+          "estimated_carbohydrate_g": 24,
+          "meal_type": "breakfast",
+          "consumed_at": "2026-06-29",
+          "food_items": ["鸡蛋", "吐司"],
+          "food_item_estimates": [
+            {
+              "name": "鸡蛋",
+              "energy_kcal": 70,
+              "protein_g": 6,
+              "fat_g": 5,
+              "carbohydrate_g": 1
+            },
+            {
+              "name": "吐司",
+              "energy_kcal": 140,
+              "protein_g": 7,
+              "fat_g": 3,
+              "carbohydrate_g": 23
+            }
+          ],
+          "assumptions": ["按常见份量估算"],
+          "source_summary": "AI 推理估算"
+        }
+        """
+
+        let reply = try AssistantAIReply.parse(from: content)
+        let calculation = try #require(reply.estimatedCalculation(for: "早餐吃了鸡蛋和吐司"))
+
+        #expect(calculation.items.count == 2)
+        #expect(calculation.totalProteinG == 13)
+        #expect(calculation.totalFatG == 8)
+        #expect(calculation.totalCarbohydrateG == 24)
+        #expect(calculation.hasMacroNutrients)
+    }
+
     @Test func assistantReplyParserAcceptsCommonModelJSONVariations() throws {
         let content = """
         ```json
@@ -110,5 +157,38 @@ struct BHealthTests {
         )
 
         #expect(MealDateResolver.detectedDate(in: "昨晚吃了一碗卤煮火烧", referenceDate: referenceDate) == expectedDay)
+    }
+
+    @Test func webSearchPlannerUsesSearchOnlyWhenUseful() {
+        #expect(WebSearchPlanner.query(for: "麦当劳巨无霸", mode: .foodLog, calculation: nil)?.contains("protein") == true)
+        #expect(WebSearchPlanner.query(for: "最新蛋白质摄入建议是什么", mode: .healthCoach, calculation: nil) != nil)
+        #expect(WebSearchPlanner.query(for: "今天午餐吃了鸡蛋 100g", mode: .foodLog, calculation: sampleCalculation) == nil)
+    }
+
+    private var sampleCalculation: MealCalculationResult {
+        MealCalculationResult(
+            items: [
+                MealItemCalculation(
+                    rawText: "鸡蛋 100g",
+                    matchedFoodName: "Egg",
+                    fdcId: 1,
+                    estimatedGrams: 100,
+                    energyKcal: 155,
+                    proteinG: 13,
+                    fatG: 11,
+                    carbohydrateG: 1,
+                    confidence: "medium",
+                    sourceName: "Test",
+                    sourceVersion: "test",
+                    assumptions: []
+                )
+            ],
+            totalEnergyKcal: 155,
+            rangeLowKcal: 130,
+            rangeHighKcal: 180,
+            confidence: "medium",
+            assumptions: [],
+            sourceSummary: "Test"
+        )
     }
 }

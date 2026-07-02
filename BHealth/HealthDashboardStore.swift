@@ -35,6 +35,9 @@ struct UserHealthProfile: Codable, Hashable {
 struct DailyHealthOverview: Identifiable, Hashable {
     let date: Date
     var intakeKcal: Double
+    var proteinG: Double
+    var fatG: Double
+    var carbohydrateG: Double
     var activeEnergyKcal: Double
     var basalEnergyKcal: Double
     var stepCount: Double
@@ -168,14 +171,14 @@ final class HealthDashboardStore: ObservableObject {
 
         if language == .chinese {
             return """
-            今日摄入 \(Int(today.intakeKcal.rounded())) kcal，总消耗 \(Int(today.totalBurnKcal.rounded())) kcal，运动消耗 \(Int(today.activeEnergyKcal.rounded())) kcal。
+            今日摄入 \(Int(today.intakeKcal.rounded())) kcal，蛋白质 \(Int(today.proteinG.rounded()))g，脂肪 \(Int(today.fatG.rounded()))g，碳水 \(Int(today.carbohydrateG.rounded()))g，总消耗 \(Int(today.totalBurnKcal.rounded())) kcal，运动消耗 \(Int(today.activeEnergyKcal.rounded())) kcal。
             近30日平均摄入 \(Int(averageIntake.rounded())) kcal，平均消耗 \(Int(averageBurn.rounded())) kcal，平均热量差 \(Int(averageBalance.rounded())) kcal/日。
             近期饮食记录：\(recentRecords.isEmpty ? "暂无" : recentRecords)
             """
         }
 
         return """
-        Today: intake \(Int(today.intakeKcal.rounded())) kcal, total burn \(Int(today.totalBurnKcal.rounded())) kcal, active burn \(Int(today.activeEnergyKcal.rounded())) kcal.
+        Today: intake \(Int(today.intakeKcal.rounded())) kcal, protein \(Int(today.proteinG.rounded()))g, fat \(Int(today.fatG.rounded()))g, carbs \(Int(today.carbohydrateG.rounded()))g, total burn \(Int(today.totalBurnKcal.rounded())) kcal, active burn \(Int(today.activeEnergyKcal.rounded())) kcal.
         Last 30 days: average intake \(Int(averageIntake.rounded())) kcal, average burn \(Int(averageBurn.rounded())) kcal, average balance \(Int(averageBalance.rounded())) kcal/day.
         Recent meal records: \(recentRecords.isEmpty ? "None" : recentRecords)
         """
@@ -223,18 +226,21 @@ final class HealthDashboardStore: ObservableObject {
         let calendar = Calendar.current
         let todayStart = calendar.startOfDay(for: Date())
         let basal = estimatedBasalEnergyKcal()
-        let intakeByDay = intakeTotalsByDay(calendar: calendar)
+        let nutrientTotalsByDay = nutrientTotalsByDay(calendar: calendar)
         var summaries: [DailyHealthOverview] = []
 
         for offset in stride(from: -364, through: 0, by: 1) {
             guard let day = calendar.date(byAdding: .day, value: offset, to: todayStart) else { continue }
-            let intake = intakeByDay[day] ?? 0
+            let nutrients = nutrientTotalsByDay[day] ?? DailyNutrientTotals()
             let metrics = healthMetricsByDay[day]
 
             summaries.append(
                 DailyHealthOverview(
                     date: day,
-                    intakeKcal: intake,
+                    intakeKcal: nutrients.energyKcal,
+                    proteinG: nutrients.proteinG,
+                    fatG: nutrients.fatG,
+                    carbohydrateG: nutrients.carbohydrateG,
                     activeEnergyKcal: metrics?.activeEnergyKcal ?? 0,
                     basalEnergyKcal: basal,
                     stepCount: metrics?.stepCount ?? 0,
@@ -248,11 +254,18 @@ final class HealthDashboardStore: ObservableObject {
         today = summaries.last ?? DailyHealthOverview.empty(for: Date())
     }
 
-    private func intakeTotalsByDay(calendar: Calendar) -> [Date: Double] {
-        savedMealRecords.reduce(into: [Date: Double]()) { result, record in
+    private func nutrientTotalsByDay(calendar: Calendar) -> [Date: DailyNutrientTotals] {
+        savedMealRecords.reduce(into: [Date: DailyNutrientTotals]()) { result, record in
             let day = calendar.startOfDay(for: record.consumedAt)
-            result[day, default: 0] += record.calculation.totalEnergyKcal
+            result[day, default: DailyNutrientTotals()].add(record.calculation)
         }
+    }
+
+    var proteinTargetG: Double {
+        if let weightKg = profile.weightKg, weightKg > 0 {
+            return weightKg * 1.6
+        }
+        return 80
     }
 
     private func average(of values: [Double]) -> Double {
@@ -309,6 +322,20 @@ struct HealthDayMetrics: Hashable {
     let date: Date
     let activeEnergyKcal: Double
     let stepCount: Double
+}
+
+private struct DailyNutrientTotals: Hashable {
+    var energyKcal: Double = 0
+    var proteinG: Double = 0
+    var fatG: Double = 0
+    var carbohydrateG: Double = 0
+
+    mutating func add(_ calculation: MealCalculationResult) {
+        energyKcal += calculation.totalEnergyKcal
+        proteinG += calculation.totalProteinG
+        fatG += calculation.totalFatG
+        carbohydrateG += calculation.totalCarbohydrateG
+    }
 }
 
 struct HealthKitService {
@@ -554,6 +581,9 @@ extension DailyHealthOverview {
         DailyHealthOverview(
             date: date,
             intakeKcal: 0,
+            proteinG: 0,
+            fatG: 0,
+            carbohydrateG: 0,
             activeEnergyKcal: 0,
             basalEnergyKcal: 0,
             stepCount: 0,

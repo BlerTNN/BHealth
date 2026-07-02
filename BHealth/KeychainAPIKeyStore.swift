@@ -13,6 +13,7 @@ final class KeychainAPIKeyStore {
 
     private let service = "com.tydnzs.BHealth.deepseek"
     private let account = "apiKey"
+    private let genericStore = KeychainSecretStore()
 
     private init() {}
 
@@ -21,11 +22,51 @@ final class KeychainAPIKeyStore {
     }
 
     func saveAPIKey(_ value: String) throws {
+        try genericStore.save(value, service: service, account: account)
+    }
+
+    func readAPIKey() throws -> String {
+        try genericStore.read(service: service, account: account)
+    }
+
+    func deleteAPIKey() throws {
+        try genericStore.delete(service: service, account: account)
+    }
+}
+
+final class TavilyAPIKeyStore {
+    static let shared = TavilyAPIKeyStore()
+
+    private let service = "com.tydnzs.BHealth.tavily"
+    private let account = "apiKey"
+    private let genericStore = KeychainSecretStore()
+
+    private init() {}
+
+    var hasAPIKey: Bool {
+        (try? readAPIKey())?.isEmpty == false
+    }
+
+    func saveAPIKey(_ value: String) throws {
+        try genericStore.save(value, service: service, account: account)
+    }
+
+    func readAPIKey() throws -> String {
+        try genericStore.read(service: service, account: account)
+    }
+
+    func deleteAPIKey() throws {
+        try genericStore.delete(service: service, account: account)
+    }
+}
+
+private struct KeychainSecretStore {
+    func save(_ value: String, service: String, account: String) throws {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw KeychainError.emptyValue }
         guard let data = trimmed.data(using: .utf8) else { throw KeychainError.invalidData }
 
-        try? deleteAPIKey()
+        try? delete(service: service, account: account)
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -39,7 +80,7 @@ final class KeychainAPIKeyStore {
         guard status == errSecSuccess else { throw KeychainError.unhandled(status) }
     }
 
-    func readAPIKey() throws -> String {
+    func read(service: String, account: String) throws -> String {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -60,7 +101,7 @@ final class KeychainAPIKeyStore {
         return value
     }
 
-    func deleteAPIKey() throws {
+    func delete(service: String, account: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
